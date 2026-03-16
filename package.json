@@ -1,0 +1,29 @@
+{
+  "name": "forge1201aip",
+  "version": "1.0.0",
+  "description": "This archive is a reusable bootstrap repository for agent-driven projects.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sigure-0424/ProjectBase.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/sigure-0424/ProjectBase/issues"
+  },
+  "homepage": "https://github.com/sigure-0424/ProjectBase#readme",
+  "dependencies": {
+    "@toml-tools/parser": "^1.0.0",
+    "mineflayer": "^4.35.0",
+    "mineflayer-pathfinder": "^2.4.5",
+    "prismarine-registry": "^1.11.0"
+  }
+}

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://cdn.statically.io/gh/nguyenngoclongdev/cdn/main/schema/v11/terminal-keeper.json",
+  "theme": "tribe",
+  "active": "default",
+  "activateOnStartup": true,
+  "keepExistingTerminals": false,
+  "sessions": {
+    "default": [
+      {
+        "name": "docker dev (WSL)",
+        "autoExecuteCommands": true,
+        "icon": "rocket",
+        "color": "terminal.ansiGreen",
+        "shellPath": "wsl.exe",
+        "commands": [
+          "bash -lc './scripts/tk_ensure_docker.sh'"
+        ]
+      },
+      {
+        "name": "ai launch menu (WSL)",
+        "autoExecuteCommands": true,
+        "icon": "plug",
+        "color": "terminal.ansiBlue",
+        "shellPath": "wsl.exe",
+        "commands": [
+          "bash -lc './scripts/tk_start_ai_session.sh'"
+        ]
+      },
+      {
+        "name": "terminal (default)",
+        "autoExecuteCommands": false,
+        "icon": "terminal",
+        "color": "terminal.ansiWhite",
+        "commands": []
+      }
+    ],
+    "claude-only": [
+      {
+        "name": "docker dev (WSL)",
+        "autoExecuteCommands": true,
+        "icon": "rocket",
+        "color": "terminal.ansiGreen",
+        "shellPath": "wsl.exe",
+        "commands": [
+          "bash -lc './scripts/tk_ensure_docker.sh'"
+        ]
+      },
+      {
+        "name": "claude (WSL)",
+        "autoExecuteCommands": true,
+        "icon": "beaker",
+        "color": "terminal.ansiCyan",
+        "shellPath": "wsl.exe",
+        "commands": [
+          "bash -lc './scripts/tk_start_claude.sh'"
+        ]
+      },
+      {
+        "name": "terminal (default)",
+        "autoExecuteCommands": false,
+        "icon": "terminal",
+        "color": "terminal.ansiWhite",
+        "commands": []
+      }
+    ],
+    "gemini-only": [
+      {
+        "name": "docker dev (WSL)",
+        "autoExecuteCommands": true,
+        "icon": "rocket",
+        "color": "terminal.ansiGreen",
+        "shellPath": "wsl.exe",
+        "commands": [
+          "bash -lc './scripts/tk_ensure_docker.sh'"
+        ]
+      },
+      {
+        "name": "gemini (WSL)",
+        "autoExecuteCommands": true,
+        "icon": "code",
+        "color": "terminal.ansiYellow",
+        "shellPath": "wsl.exe",
+        "commands": [
+          "bash -lc './scripts/tk_start_gemini.sh'"
+        ]
+      },
+      {
+        "name": "terminal (default)",
+        "autoExecuteCommands": false,
+        "icon": "terminal",
+        "color": "terminal.ansiWhite",
+        "commands": []
+      }
+    ],
+    "ai-both": [
+      {
+        "name": "docker dev (WSL)",
+        "autoExecuteCommands": true,
+        "icon": "rocket",
+        "color": "terminal.ansiGreen",
+        "shellPath": "wsl.exe",
+        "commands": [
+          "bash -lc './scripts/tk_ensure_docker.sh'"
+        ]
+      },
+      {
+        "name": "claude (WSL)",
+        "autoExecuteCommands": true,
+        "icon": "beaker",
+        "color": "terminal.ansiCyan",
+        "shellPath": "wsl.exe",
+        "commands": [
+          "bash -lc './scripts/tk_start_claude.sh'"
+        ]
+      },
+      {
+        "name": "gemini (WSL)",
+        "autoExecuteCommands": true,
+        "icon": "code",
+        "color": "terminal.ansiYellow",
+        "shellPath": "wsl.exe",
+        "commands": [
+          "bash -lc './scripts/tk_start_gemini.sh'"
+        ]
+      },
+      {
+        "name": "terminal (default)",
+        "autoExecuteCommands": false,
+        "icon": "terminal",
+        "color": "terminal.ansiWhite",
+        "commands": []
+      }
+    ],
+    "saved-session": []
+  }
+}

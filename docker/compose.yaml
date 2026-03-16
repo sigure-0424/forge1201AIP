@@ -1,0 +1,16 @@
+services:
+  dev:
+    image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+    gpus: all
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    command: >
+      bash -lc "
+      command -v nvidia-smi >/dev/null 2>&1 || { echo 'nvidia-smi not found in container'; exit 1; };
+      nvidia-smi >/dev/null || { echo 'CUDA GPU is not accessible from Docker'; exit 1; };
+      sleep infinity
+      "

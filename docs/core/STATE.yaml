@@ -1,0 +1,15 @@
+protocol_version: v6
+project_name: "Minecraft Forge 1.20.1 AI Player System"
+project_short_name: "Forge1201AIP"
+current_goal: "Implement autonomous AI player framework using Mineflayer for Minecraft 1.20.1 Forge environment, including FML3 handshakes and dynamic registry handling."
+active_tasks: []
+recent_changes:
+\
+decisions_index:
+\
+smoke_status:
+  last_run: "2026-03-16"
+  command: "node tests/smoke.js"
+  result: "passed"
+hazards:
+\

@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.build/
+.dist/
+*.whl
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+
+# Test / tooling
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Node.js
+node_modules/
+package-lock.json
+
+# Local secrets
+.env
+.env.*
+kaggle.json
+.kaggle/
+
+# Generated / heavy data
+data/raw/**
+data/processed/**
+results/**
+tmp/**
+analysis/**
+
+# Keep folder placeholders / docs
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/sample/.gitkeep
+!data/sample/README.md
+!results/.gitkeep
+!tmp/.gitkeep
+!tmp/locks/.gitkeep
+!tmp/orchestrator/
+!tmp/orchestrator/jobs/
+!tmp/orchestrator/jobs/.gitkeep
+!tmp/orchestrator/archive/
+!tmp/orchestrator/archive/.gitkeep
+!analysis/.gitkeep
