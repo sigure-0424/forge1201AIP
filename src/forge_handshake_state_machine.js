@@ -93,7 +93,8 @@ class ForgeHandshakeStateMachine extends EventEmitter {
         if (disc === 1) {
             const reply = this.buildModListReply(payload);
             this.sendResponse(messageId, responseChannel, innerChannelName || this.innerChannel, reply);
-        } else if (disc === 3 || disc === 4) {
+        } else if (disc === 3 || disc === 4 || disc === 5 || disc === 6) {
+            // Disc 3: RegistryData, Disc 4: Ack, Disc 5: ModData/ConfigData, Disc 6: RegistrySync
             this.sendAck(messageId, responseChannel, innerChannelName || this.innerChannel);
             if (disc === 3) this.registrySyncBuffer.push(payload);
         } else if (disc === 0) {

@@ -1,5 +1,4 @@
 // bot_actuator.js
-// Isolated child process containing the actual Mineflayer logic and middlewares
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const ForgeHandshakeStateMachine = require('./forge_handshake_state_machine');
@@ -12,9 +11,25 @@ const nbt = require('prismarine-nbt');
 const botId = process.env.BOT_ID || 'Bot';
 const botOptions = process.env.BOT_OPTIONS ? JSON.parse(process.env.BOT_OPTIONS) : {};
 
-process.send({ type: 'LOG', data: `Actuator for ${botId} starting up...` });
+console.log(`[Actuator] Starting bot ${botId}...`);
 
-// Global NBT Leniency Patch: Handle Forge's anonymous NBT in named slots
+// Global Protocol Patch for Forge 1.20.1
+// We patch minecraft-data globally to ensure all subsequent Client instances use 'native'
+// for packets that often cause parse errors in modded environments.
+try {
+    const mcDataGlobal = require('minecraft-data')('1.20.1');
+    if (mcDataGlobal && mcDataGlobal.protocol && mcDataGlobal.protocol.play && mcDataGlobal.protocol.play.toClient) {
+        const types = mcDataGlobal.protocol.play.toClient.types;
+        types.declare_recipes = 'restBuffer';
+        types.tags = 'restBuffer';
+        types.advancements = 'restBuffer';
+        console.log('[Actuator] Applied global protocol patches (Recipes/Tags/Advancements -> restBuffer).');
+    }
+} catch (e) {
+    console.error(`[Actuator] Global protocol patch failed: ${e.message}`);
+}
+
+// Global NBT Patch for Forge 1.20.1
 try {
     const nbtProto = nbt.protos.big;
     const originalRead = nbtProto.read;
@@ -22,13 +37,12 @@ try {
         try {
             return originalRead.call(this, buffer, offset);
         } catch (e) {
-            // Fallback to anonymous read (no name length prefix)
             return nbtProto.readAnon(buffer, offset);
         }
     };
-    process.send({ type: 'LOG', data: 'Applied global NBT leniency patch.' });
+    console.log('[Actuator] Applied global NBT leniency patch.');
 } catch (e) {
-    process.send({ type: 'LOG', data: `NBT patch failed: ${e.message}` });
+    console.error(`[Actuator] NBT patch failed: ${e.message}`);
 }
 
 const bot = mineflayer.createBot({
@@ -36,144 +50,64 @@ const bot = mineflayer.createBot({
     port: botOptions.port || 25565,
     username: botId,
     version: '1.20.1',
-    maxPacketSize: 10 * 1024 * 1024 // 10MB for large modded packets
+    maxPacketSize: 10 * 1024 * 1024
 });
 
-// Forge 1.20.1 Protocol Patch: Disable problematic large packets
-bot.once('inject_allowed', () => {
-    process.send({ type: 'LOG', data: `${botId} client injected, initializing FML3 handshake.` });
+// Protocol Patch: Preempt default plugin message listeners
+bot.on('inject_allowed', () => {
+    console.log('[Actuator] Protocol injection allowed. Initializing handshake...');
     
-    // Patch protocol to skip recipes and tags if they cause parse errors
-    const tryPatch = () => {
-        try {
-            const protocol = bot._client.deserializer.protocol;
-            if (protocol && protocol.play && protocol.play.toClient && protocol.play.toClient.types) {
-                protocol.play.toClient.types.declare_recipes = 'native';
-                protocol.play.toClient.types.tags = 'native';
-                process.send({ type: 'LOG', data: 'Successfully patched declare_recipes and tags to native.' });
-                return true;
-            }
-        } catch (e) {}
-        return false;
-    };
-
-    if (!tryPatch()) {
-        const timer = setInterval(() => { if (tryPatch()) clearInterval(timer); }, 50);
-        setTimeout(() => clearInterval(timer), 5000);
-    }
-
-    // Intercept outgoing custom_payload to silence server-side SIMPLENET empty payload errors
-    const originalWrite = bot._client.write.bind(bot._client);
-    bot._client.write = function(name, params) {
-        if (name === 'custom_payload' && params.channel === 'fml:handshake') {
-            if (!params.data || params.data.length === 0) {
-                process.send({ type: 'LOG', data: `Intercepted and dropped empty custom_payload on fml:handshake.` });
-                return;
-            }
-        }
-        originalWrite(name, params);
-    };
-
+    // Handshake initialization
     const handshake = new ForgeHandshakeStateMachine(bot._client);
-    
     handshake.on('handshake_complete', (registrySyncBuffer) => {
-        process.send({ type: 'LOG', data: `${botId} FML3 handshake complete. Scheduling registry injection...` });
-        
-        // Use a small delay to avoid blocking the initial PLAY state packet processing
+        console.log('[Actuator] Handshake complete. Injecting registries...');
         setTimeout(() => {
             const injector = new DynamicRegistryInjector(bot.registry);
             const parsed = injector.parseRegistryPayload(registrySyncBuffer);
             injector.injectBlockToRegistry(parsed);
-
-            // Physics Fix: Proxy the blocks registry to return a solid block for any unknown ID.
-            // This prevents the bot from treating unknown modded blocks as air and falling into the void (death).
-            const blockHandler = {
-                get: function(target, prop) {
+            
+            // Solid block proxy to prevent void death
+            const handler = {
+                get: (target, prop) => {
                     if (prop in target) return target[prop];
-                    if (!isNaN(prop) && prop !== 'length') {
-                        return {
-                            id: parseInt(prop, 10),
-                            name: 'unknown_mod_block',
-                            displayName: 'Unknown Mod Block',
-                            hardness: 1.0,
-                            diggable: true,
-                            boundingBox: 'block',
-                            transparent: false,
-                            material: 'rock',
-                            harvestTools: {},
-                            states: []
-                        };
-                    }
+                    if (!isNaN(prop)) return { id: parseInt(prop), name: 'mod_block', boundingBox: 'block', hardness: 1 };
                     return undefined;
                 }
             };
-            bot.registry.blocks = new Proxy(bot.registry.blocks, blockHandler);
-            process.send({ type: 'LOG', data: 'Applied solid block proxy for unknown registry IDs.' });
+            bot.registry.blocks = new Proxy(bot.registry.blocks, handler);
         }, 100);
-    });
-
-    // Handle packet parsing errors specifically
-    bot._client.on('error', (err) => {
-        process.send({ type: 'ERROR', category: 'ParseError', details: `Parse error for ${err.field}: ${err.message}` });
     });
 });
 
-// Load pathfinder
 bot.loadPlugin(pathfinder);
 
-bot.once('spawn', () => {
-    process.send({ type: 'LOG', data: `${botId} spawned successfully.` });
-    
-    // Initialize middlewares
+bot.on('spawn', () => {
+    console.log('[Actuator] Bot spawned.');
     const debouncer = new EventDebouncer(bot);
     const nbtPatch = new InventoryNBTPatch(bot);
     const hazard = new CreateContraptionHazard(bot.pathfinder);
-    
     nbtPatch.applyPatches();
     hazard.applyHeuristicOverride();
-
     const mcData = require('minecraft-data')(bot.version);
-    const movements = new Movements(bot, mcData);
-    bot.pathfinder.setMovements(movements);
-
-    process.send({ type: 'LOG', data: `${botId} middlewares initialized.` });
-
-    // Chat command listener
-    bot.on('chat', (username, message) => {
-        if (username === bot.username) return;
-        process.send({ type: 'LOG', data: `Received chat from ${username}: ${message}` });
-
-        const args = message.split(' ');
-        const command = args.shift();
-
-        if (command === 'come') {
-            const target = bot.players[username]?.entity;
-            if (target) {
-                process.send({ type: 'LOG', data: `Pathfinding to ${username}...` });
-                bot.pathfinder.setGoal(new goals.GoalFollow(target, 1), true);
-            } else {
-                bot.chat(`I can't see you, ${username}.`);
-            }
-        }
-    });
+    bot.pathfinder.setMovements(new Movements(bot, mcData));
+    bot.chat('AI Player Online');
 });
 
-// Command Listener via IPC
-process.on('message', (msg) => {
-    if (msg.command === 'move_to') {
-        const { x, y, z } = msg.params;
-        process.send({ type: 'LOG', data: `${botId} moving to ${x}, ${y}, ${z}` });
-        const goal = new goals.GoalBlock(x, y, z);
-        bot.pathfinder.setGoal(goal);
-    } else if (msg.command === 'inject_dummy_block') {
-        process.send({ type: 'LOG', data: 'Dummy block injected successfully for recovery.' });
-    }
+bot._client.on('error', (err) => {
+    console.error(`[Actuator] Protocol Error: ${err.message} at ${err.field}`);
+    process.send({ type: 'ERROR', category: 'ParseError', details: err.message });
 });
 
 bot.on('error', (err) => {
+    console.error(`[Actuator] Bot Error: ${err.message}`);
     process.send({ type: 'ERROR', category: 'BotError', details: err.message });
 });
 
 bot.on('kicked', (reason) => {
+    console.log(`[Actuator] Kicked: ${reason}`);
     process.send({ type: 'ERROR', category: 'Kicked', details: reason });
+});
+
+bot.on('end', () => {
+    console.log('[Actuator] Connection ended.');
 });
