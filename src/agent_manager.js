@@ -30,6 +30,13 @@ class AgentManager {
         return botProcess;
     }
 
+    handleProcessCrash(botId, code) {
+        if (code !== 0 && code !== null) {
+            console.error(`[AgentManager] Bot process ${botId} crashed with code ${code}.`);
+            // Add to recovery logic if needed
+        }
+    }
+
     handleIPCMessage(botId, message) {
         if (message.type === 'ERROR') {
             console.error(`[AgentManager] Received ERROR from bot ${botId}: ${message.category} - ${message.details}`);

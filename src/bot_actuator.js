@@ -7,11 +7,29 @@ const DynamicRegistryInjector = require('./dynamic_registry_injector');
 const EventDebouncer = require('./event_debouncer');
 const InventoryNBTPatch = require('./inventory_nbt_patch');
 const CreateContraptionHazard = require('./create_contraption_hazard');
+const nbt = require('prismarine-nbt');
 
 const botId = process.env.BOT_ID || 'Bot';
 const botOptions = process.env.BOT_OPTIONS ? JSON.parse(process.env.BOT_OPTIONS) : {};
 
 process.send({ type: 'LOG', data: `Actuator for ${botId} starting up...` });
+
+// Global NBT Leniency Patch: Handle Forge's anonymous NBT in named slots
+try {
+    const nbtProto = nbt.protos.big;
+    const originalRead = nbtProto.read;
+    nbtProto.read = function (buffer, offset) {
+        try {
+            return originalRead.call(this, buffer, offset);
+        } catch (e) {
+            // Fallback to anonymous read (no name length prefix)
+            return nbtProto.readAnon(buffer, offset);
+        }
+    };
+    process.send({ type: 'LOG', data: 'Applied global NBT leniency patch.' });
+} catch (e) {
+    process.send({ type: 'LOG', data: `NBT patch failed: ${e.message}` });
+}
 
 const bot = mineflayer.createBot({
     host: (botOptions.host || 'localhost') + '\0FML3\0',
@@ -21,22 +39,27 @@ const bot = mineflayer.createBot({
     maxPacketSize: 10 * 1024 * 1024 // 10MB for large modded packets
 });
 
-// We must append the FML3 token to the host to bypass the initial kick if it's not already handled by node-minecraft-protocol
-// Actually, let's wait for bot._client to be available
+// Forge 1.20.1 Protocol Patch: Disable problematic large packets
 bot.on('inject_allowed', () => {
     process.send({ type: 'LOG', data: `${botId} client injected, initializing FML3 handshake.` });
     
-    // Forge 1.20.1 Protocol Patch: Avoid crashing on modded recipes and tags
-    // Some Forge servers send NBT that is not compatible with standard NMP/Prismarine-NBT parsers.
-    try {
-        const protocol = bot._client.deserializer.protocol;
-        if (protocol?.play?.toClient?.types) {
-            protocol.play.toClient.types.declare_recipes = 'native';
-            protocol.play.toClient.types.tags = 'native';
-            process.send({ type: 'LOG', data: 'Patched protocol for Forge 1.20.1 (Recipes and Tags set to native).' });
-        }
-    } catch (e) {
-        process.send({ type: 'LOG', data: `Protocol patch failed: ${e.message}` });
+    // Patch protocol to skip recipes and tags if they cause parse errors
+    const tryPatch = () => {
+        try {
+            const protocol = bot._client.deserializer.protocol;
+            if (protocol && protocol.play && protocol.play.toClient && protocol.play.toClient.types) {
+                protocol.play.toClient.types.declare_recipes = 'native';
+                protocol.play.toClient.types.tags = 'native';
+                process.send({ type: 'LOG', data: 'Successfully patched declare_recipes and tags to native.' });
+                return true;
+            }
+        } catch (e) {}
+        return false;
+    };
+
+    if (!tryPatch()) {
+        const timer = setInterval(() => { if (tryPatch()) clearInterval(timer); }, 50);
+        setTimeout(() => clearInterval(timer), 5000);
     }
 
     const handshake = new ForgeHandshakeStateMachine(bot._client);
@@ -50,8 +73,7 @@ bot.on('inject_allowed', () => {
 
     // Handle packet parsing errors specifically
     bot._client.on('error', (err) => {
-        // If it's a parse error, we already tried to patch it. If it still happens, we report it.
-        process.send({ type: 'ERROR', category: 'ParseError', details: `Failed to parse S2C packet: ${err.message} at ${err.field}` });
+        process.send({ type: 'ERROR', category: 'ParseError', details: `Parse error for ${err.field}: ${err.message}` });
     });
 });
 
@@ -60,9 +82,7 @@ bot.loadPlugin(pathfinder);
 
 bot.once('spawn', () => {
     process.send({ type: 'LOG', data: `${botId} spawned successfully.` });
-    const block = bot.blockAt(bot.entity.position);
-    process.send({ type: 'LOG', data: `Spawned on block: ${block.name} (ID: ${block.type})` });
-
+    
     // Initialize middlewares
     const debouncer = new EventDebouncer(bot);
     const nbtPatch = new InventoryNBTPatch(bot);
@@ -93,16 +113,6 @@ bot.once('spawn', () => {
             } else {
                 bot.chat(`I can't see you, ${username}.`);
             }
-        } else if (command === 'goto') {
-            const x = parseInt(args[0], 10);
-            const y = parseInt(args[1], 10);
-            const z = parseInt(args[2], 10);
-            if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
-                process.send({ type: 'LOG', data: `Pathfinding to ${x}, ${y}, ${z}...` });
-                bot.pathfinder.setGoal(new goals.GoalBlock(x, y, z));
-            } else {
-                bot.chat('Invalid coordinates for goto command.');
-            }
         }
     });
 });
@@ -115,18 +125,8 @@ process.on('message', (msg) => {
         const goal = new goals.GoalBlock(x, y, z);
         bot.pathfinder.setGoal(goal);
     } else if (msg.command === 'inject_dummy_block') {
-        // Recovery logic
         process.send({ type: 'LOG', data: 'Dummy block injected successfully for recovery.' });
     }
-});
-
-// Event listeners for pathfinding
-bot.on('path_update', (results) => {
-    process.send({ type: 'LOG', data: `Pathfinder update: status=${results.status}, path length=${results.path.length}` });
-});
-
-bot.on('goal_reached', () => {
-    process.send({ type: 'LOG', data: 'Goal reached.' });
 });
 
 bot.on('error', (err) => {

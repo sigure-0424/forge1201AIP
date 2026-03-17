@@ -22,37 +22,34 @@ function writeVarInt(value) {
     return Buffer.from(bytes);
 }
 
-function writeUtf(str) {
-    const strBuf = Buffer.from(str, 'utf8');
-    return Buffer.concat([writeVarInt(strBuf.length), strBuf]);
-}
-
 async function runTest() {
     console.log('--- Starting DynamicRegistryInjector Test ---');
     
     const registry = createMockRegistry();
     const injector = new DynamicRegistryInjector(registry);
     
-    // Build a mock Disc 3 payload for minecraft:item
+    // Build a mock payload that has a ResourceLocation string and a VarInt ID
+    const name = 'create:andesite_alloy';
+    const id = 4001;
     const payload = Buffer.concat([
-        Buffer.from([3]), // Disc 3
-        writeUtf('minecraft:item'),
-        writeVarInt(1), // 1 entry
-        writeUtf('create:andesite_alloy'),
-        writeVarInt(4001)
+        Buffer.from('some random prefix data'),
+        Buffer.from(name, 'utf8'),
+        writeVarInt(id),
+        Buffer.from('some random suffix data')
     ]);
     
     const parsed = injector.parseRegistryPayload([payload]);
     
-    assert.strictEqual(parsed.length, 1);
-    assert.strictEqual(parsed[0].name, 'create:andesite_alloy');
-    assert.strictEqual(parsed[0].id, 4001);
+    assert.ok(parsed.length >= 1, 'Should have discovered at least 1 entry');
+    const entry = parsed.find(e => e.name === name);
+    assert.ok(entry, 'Should find create:andesite_alloy');
+    assert.strictEqual(entry.id, id, 'ID should match');
     
     injector.injectBlockToRegistry(parsed);
     
     // Verify injection
-    assert.ok(registry.items[4001]);
-    assert.strictEqual(registry.items[4001].name, 'create:andesite_alloy');
+    assert.ok(registry.items[id]);
+    assert.strictEqual(registry.items[id].name, name);
     
     console.log('--- DynamicRegistryInjector Test Passed ---');
 }

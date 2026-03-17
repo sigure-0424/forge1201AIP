@@ -10,7 +10,7 @@ class DynamicRegistryInjector {
         let result = 0;
         let read;
         do {
-            if (offset + numRead >= buffer.length) throw new Error('Buffer overflow reading VarInt');
+            if (offset + numRead >= buffer.length) throw new Error('Buffer overflow');
             read = buffer.readUInt8(offset + numRead);
             let value = (read & 0b01111111);
             result |= (value << (7 * numRead));
@@ -19,51 +19,33 @@ class DynamicRegistryInjector {
         return { value: result, bytesRead: numRead };
     }
 
-    readUtf(buffer, offset) {
-        const { value: len, bytesRead } = this.readVarInt(buffer, offset);
-        const str = buffer.toString('utf8', offset + bytesRead, offset + bytesRead + len);
-        return { value: str, newOffset: offset + bytesRead + len };
-    }
-
     parseRegistryPayload(payloadBuffers) {
         console.log(`[DynamicRegistry] Parsing ${payloadBuffers.length} registry payload buffers...`);
         const parsedEntries = [];
         
         for (const buf of payloadBuffers) {
             try {
-                let offset = 0;
-                const disc = buf[offset++];
-                if (disc !== 3) continue; // Only process S2CRegistry (Disc 3)
-
-                const { value: registryName, newOffset: o1 } = this.readUtf(buf, offset);
-                offset = o1;
+                const str = buf.toString('utf8');
+                // Simple regex to find ResourceLocations
+                const matches = str.match(/[a-z0-9_.-]+:[a-z0-9_.-]+/g);
                 
-                // We mainly care about blocks and items for protocol parsing and pathfinding
-                const isBlock = registryName === 'minecraft:block';
-                const isItem = registryName === 'minecraft:item';
-                
-                if (!isBlock && !isItem) continue;
-
-                const { value: entriesCount, bytesRead: br1 } = this.readVarInt(buf, offset);
-                offset += br1;
-                
-                const type = isBlock ? 'block' : 'item';
-                console.log(`[DynamicRegistry] Registry ${registryName} contains ${entriesCount} entries.`);
-
-                for (let i = 0; i < entriesCount; i++) {
-                    const { value: entryName, newOffset: o2 } = this.readUtf(buf, offset);
-                    offset = o2;
-                    const { value: entryId, bytesRead: br2 } = this.readVarInt(buf, offset);
-                    offset += br2;
-                    
-                    // In some FML3 versions, there might be a boolean for "has data"
-                    if (offset < buf.length) {
-                        // Check if the next byte looks like a boolean or another entry start
-                        // Actually, just push for now. If it fails, we'll see.
-                    }
-
-                    if (!parsedEntries.find(e => e.name === entryName)) {
-                        parsedEntries.push({ id: entryId, name: entryName, type });
+                if (matches) {
+                    for (const match of matches) {
+                        const matchIndex = buf.indexOf(Buffer.from(match, 'utf8'));
+                        if (matchIndex === -1) continue;
+                        
+                        let offset = matchIndex + Buffer.from(match, 'utf8').length;
+                        
+                        try {
+                            const { value: entryId, bytesRead } = this.readVarInt(buf, offset);
+                            const type = match.includes('block') || match.includes('ore') ? 'block' : 'item';
+                            
+                            if (!parsedEntries.find(e => e.name === match)) {
+                                parsedEntries.push({ id: entryId, name: match, type });
+                            }
+                        } catch (e) {
+                            // ID reading failed, likely not a registry entry entry point
+                        }
                     }
                 }
             } catch (e) {
@@ -71,7 +53,7 @@ class DynamicRegistryInjector {
             }
         }
         
-        console.log(`[DynamicRegistry] Discovered ${parsedEntries.length} entries.`);
+        console.log(`[DynamicRegistry] Discovered ${parsedEntries.length} entries via heuristic.`);
         return parsedEntries;
     }
 
@@ -80,13 +62,7 @@ class DynamicRegistryInjector {
 
         for (const entry of parsedEntries) {
             if (entry.type === 'block') {
-                // Skip if already exists in Vanilla registry to avoid overwriting with potentially wrong data
                 if (this.registry.blocksByName[entry.name]) continue;
-
-                let boundingBox = 'block';
-                if (entry.name.includes('slab') || entry.name.includes('panel') || entry.name.includes('plate')) {
-                    boundingBox = 'empty';
-                }
 
                 this.registry.blocks[entry.id] = {
                     id: entry.id,
@@ -94,10 +70,10 @@ class DynamicRegistryInjector {
                     displayName: entry.name,
                     hardness: 1.0,
                     diggable: true,
-                    boundingBox: boundingBox,
+                    boundingBox: 'block',
                     material: 'rock',
                     harvestTools: {},
-                    states: [] // Forge 1.20.1 needs this for some internal Mineflayer lookups
+                    states: []
                 };
                 this.registry.blocksByName[entry.name] = this.registry.blocks[entry.id];
             } else if (entry.type === 'item') {
