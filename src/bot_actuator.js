@@ -62,6 +62,18 @@ bot.once('inject_allowed', () => {
         setTimeout(() => clearInterval(timer), 5000);
     }
 
+    // Intercept outgoing custom_payload to silence server-side SIMPLENET empty payload errors
+    const originalWrite = bot._client.write.bind(bot._client);
+    bot._client.write = function(name, params) {
+        if (name === 'custom_payload' && params.channel === 'fml:handshake') {
+            if (!params.data || params.data.length === 0) {
+                process.send({ type: 'LOG', data: `Intercepted and dropped empty custom_payload on fml:handshake.` });
+                return;
+            }
+        }
+        originalWrite(name, params);
+    };
+
     const handshake = new ForgeHandshakeStateMachine(bot._client);
     
     handshake.on('handshake_complete', (registrySyncBuffer) => {
@@ -72,6 +84,31 @@ bot.once('inject_allowed', () => {
             const injector = new DynamicRegistryInjector(bot.registry);
             const parsed = injector.parseRegistryPayload(registrySyncBuffer);
             injector.injectBlockToRegistry(parsed);
+
+            // Physics Fix: Proxy the blocks registry to return a solid block for any unknown ID.
+            // This prevents the bot from treating unknown modded blocks as air and falling into the void (death).
+            const blockHandler = {
+                get: function(target, prop) {
+                    if (prop in target) return target[prop];
+                    if (!isNaN(prop) && prop !== 'length') {
+                        return {
+                            id: parseInt(prop, 10),
+                            name: 'unknown_mod_block',
+                            displayName: 'Unknown Mod Block',
+                            hardness: 1.0,
+                            diggable: true,
+                            boundingBox: 'block',
+                            transparent: false,
+                            material: 'rock',
+                            harvestTools: {},
+                            states: []
+                        };
+                    }
+                    return undefined;
+                }
+            };
+            bot.registry.blocks = new Proxy(bot.registry.blocks, blockHandler);
+            process.send({ type: 'LOG', data: 'Applied solid block proxy for unknown registry IDs.' });
         }, 100);
     });
 

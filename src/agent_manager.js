@@ -5,12 +5,15 @@ const path = require('path');
 class AgentManager {
     constructor() {
         this.bots = new Map(); // Map of botId to ChildProcess
+        this.restartingBots = new Set();
     }
 
     startBot(botId, options) {
+        if (this.restartingBots.has(botId)) {
+            this.restartingBots.delete(botId);
+        }
         console.log(`[AgentManager] Starting bot process for ${botId}...`);
         
-        // Isolate each bot in a separate child_process
         const botProcess = fork(path.join(__dirname, 'bot_actuator.js'), [], {
             env: { ...process.env, BOT_ID: botId, BOT_OPTIONS: JSON.stringify(options) }
         });
@@ -33,7 +36,6 @@ class AgentManager {
     handleProcessCrash(botId, code) {
         if (code !== 0 && code !== null) {
             console.error(`[AgentManager] Bot process ${botId} crashed with code ${code}.`);
-            // Add to recovery logic if needed
         }
     }
 
@@ -47,55 +49,57 @@ class AgentManager {
     }
 
     triggerRecoveryPipeline(botId, category) {
+        if (this.restartingBots.has(botId)) {
+            console.log(`[AgentManager] Bot ${botId} is already restarting. Ignoring duplicate recovery trigger.`);
+            return;
+        }
+
         console.log(`[AgentManager] Triggering recovery pipeline for ${botId}, category: ${category}`);
         
         switch (category) {
             case 'ParseError':
                 console.log(`[Recovery] Detected protocol parse error. This often happens with modded recipes in Forge 1.20.1.`);
-                console.log(`[Recovery] Restarting bot ${botId} with relaxed protocol rules.`);
-                this.restartBot(botId);
+                this.scheduleRestart(botId);
                 break;
             case 'BotError':
                 console.log(`[Recovery] General bot error. Attempting restart...`);
-                this.restartBot(botId);
+                this.scheduleRestart(botId);
                 break;
             case 'HandshakeTimeout':
                 console.log(`[Recovery] Restarting process for ${botId} and updating proxy rules.`);
-                this.restartBot(botId);
+                this.scheduleRestart(botId);
                 break;
             case 'UndefinedReference':
                 console.log(`[Recovery] Instructing ${botId} to inject dummy block...`);
-                // Send IPC message to bot to inject
                 const botProcess = this.bots.get(botId);
-                if (botProcess) {
-                    botProcess.send({ command: 'inject_dummy_block' });
-                }
+                if (botProcess) botProcess.send({ command: 'inject_dummy_block' });
                 break;
             case 'StackOverflow':
                 console.log(`[Recovery] Updating LLM prompt for ${botId} with 'Inaccessible Area' rule.`);
-                // In a real system, you would update the RAG context or system prompt
                 break;
             case 'NBTError':
                 console.log(`[Recovery] Instructing ${botId} to re-open inventory to refresh packets.`);
-                // Send IPC message to bot to execute re-open
                 break;
             default:
                 console.log(`[Recovery] Unknown error category. No automated recovery.`);
         }
     }
 
-    restartBot(botId) {
-        // Kill existing if stuck, then restart
+    scheduleRestart(botId) {
+        this.restartingBots.add(botId);
         const existingProcess = this.bots.get(botId);
         if (existingProcess) {
             existingProcess.kill('SIGKILL');
         }
         
-        // Mock restarting after a brief delay
         setTimeout(() => {
             console.log(`[AgentManager] Restarting ${botId}...`);
             this.startBot(botId, { isRestart: true });
-        }, 1000);
+        }, 5000); // Increased delay to prevent rapid crash loops
+    }
+
+    restartBot(botId) {
+        this.scheduleRestart(botId);
     }
 }
 
