@@ -32,10 +32,10 @@ async function runTest() {
     const name = 'create:andesite_alloy';
     const id = 4001;
     const payload = Buffer.concat([
-        Buffer.from('some random prefix data'),
+        Buffer.from([0, 0, 0]), // Binary zeros as prefix
         Buffer.from(name, 'utf8'),
         writeVarInt(id),
-        Buffer.from('some random suffix data')
+        Buffer.from([0, 0, 0]) // Binary zeros as suffix
     ]);
     
     const parsed = injector.parseRegistryPayload([payload]);

@@ -40,7 +40,7 @@ const bot = mineflayer.createBot({
 });
 
 // Forge 1.20.1 Protocol Patch: Disable problematic large packets
-bot.on('inject_allowed', () => {
+bot.once('inject_allowed', () => {
     process.send({ type: 'LOG', data: `${botId} client injected, initializing FML3 handshake.` });
     
     // Patch protocol to skip recipes and tags if they cause parse errors

@@ -7,6 +7,7 @@ class ForgeHandshakeStateMachine extends EventEmitter {
         this.state = 'INIT';
         this.registrySyncBuffer = [];
         this.innerChannel = 'fml:handshake';
+        this.wrapperChannel = 'fml:loginwrapper';
         this.completed = false;
 
         // Intercept incoming packets
@@ -14,8 +15,10 @@ class ForgeHandshakeStateMachine extends EventEmitter {
             if (this.client.state !== 'login') return;
 
             if (meta.name === 'login_plugin_request') {
-                if (data.channel === 'fml:loginwrapper') {
+                if (data.channel === this.wrapperChannel) {
                     this.handleLoginWrapper(data);
+                } else if (data.channel === this.innerChannel) {
+                    this.handleFmlHandshake(data.messageId, data.data, this.innerChannel);
                 } else {
                     // Acknowledge other plugins as unknown
                     this.client.write('login_plugin_response', {
@@ -51,9 +54,9 @@ class ForgeHandshakeStateMachine extends EventEmitter {
             const payload = payloadWrapper.subarray(plBr, plBr + payloadLen);
 
             if (channelName === this.innerChannel) {
-                this.handleFmlHandshake(packet.messageId, payload);
+                this.handleFmlHandshake(packet.messageId, payload, this.wrapperChannel, channelName);
             } else {
-                this.sendResponse(packet.messageId, channelName, Buffer.alloc(0));
+                this.sendResponse(packet.messageId, this.wrapperChannel, channelName, Buffer.alloc(0));
             }
         } catch (e) {
             this.client.write('login_plugin_response', {
@@ -63,39 +66,34 @@ class ForgeHandshakeStateMachine extends EventEmitter {
         }
     }
 
-    handleFmlHandshake(messageId, payload) {
+    handleFmlHandshake(messageId, payload, responseChannel, innerChannelName = null) {
         const disc = payload[0];
-        console.log(`[ForgeHandshake] Received discriminator ${disc}`);
+        console.log(`[ForgeHandshake] Received discriminator ${disc} on ${responseChannel}`);
 
         if (disc === 5) {
-            // S2CModData - "noResponse()" in Forge source
-            console.log('[ForgeHandshake] Received S2CModData. Skipping response.');
-            return; 
+            // S2CModData - Forge source says "noResponse()" but we MUST acknowledge the plugin request
+            console.log('[ForgeHandshake] Received S2CModData. Sending Ack.');
+            this.sendResponse(messageId, responseChannel, innerChannelName || this.innerChannel, Buffer.from([99]));
         } else if (disc === 1) {
             // S2CModList
             const reply = this.buildModListReply(payload);
-            this.sendResponse(messageId, this.innerChannel, reply);
+            this.sendResponse(messageId, responseChannel, innerChannelName || this.innerChannel, reply);
         } else if (disc === 3 || disc === 4) {
             // S2CRegistry or S2CConfigData
-            this.sendResponse(messageId, this.innerChannel, Buffer.from([99])); // C2SAcknowledge
+            this.sendResponse(messageId, responseChannel, innerChannelName || this.innerChannel, Buffer.from([99])); // C2SAcknowledge
             if (disc === 3) {
                 this.registrySyncBuffer.push(payload);
             }
         } else if (disc === 0) {
             // ServerHello
-            this.sendResponse(messageId, this.innerChannel, Buffer.from([1, 3]));
+            this.sendResponse(messageId, responseChannel, innerChannelName || this.innerChannel, Buffer.from([1, 3]));
         } else {
             // Default Ack
-            this.sendResponse(messageId, this.innerChannel, Buffer.from([99]));
+            this.sendResponse(messageId, responseChannel, innerChannelName || this.innerChannel, Buffer.from([99]));
         }
     }
 
     buildModListReply(serverModListPayload) {
-        // Discriminator 1: S2CModList
-        // Structure: Disc(1), Mods(List), Channels(Map), Registries(List), DataPackRegistries(List)
-        // Reply: Disc 2: C2SModListReply
-        // Structure: Disc(2), Mods(List), Channels(Map), Registries(Map)
-
         let offset = 1;
         const { value: mods, newOffset: o1 } = this.readList(serverModListPayload, offset, (b, o) => this.readUtf(b, o));
         offset = o1;
@@ -104,20 +102,21 @@ class ForgeHandshakeStateMachine extends EventEmitter {
 
         const parts = [Buffer.from([2])];
         parts.push(this.writeList(mods, (v) => this.writeUtf(v)));
-        
-        // Convert map back to list of pairs for my helper
         const channelPairs = Array.from(channels.entries());
         parts.push(this.writeList(channelPairs, (v) => Buffer.concat([this.writeUtf(v[0]), this.writeUtf(v[1])])));
-        
         parts.push(this.writeVarIntBuf(0)); // Registries map size 0
-
         return Buffer.concat(parts);
     }
 
-    sendResponse(messageId, channel, payload) {
-        const channelBuf = this.writeUtf(channel);
-        const payloadLenBuf = this.writeVarIntBuf(payload.length);
-        const data = Buffer.concat([channelBuf, payloadLenBuf, payload]);
+    sendResponse(messageId, channel, innerChannel, payload) {
+        let data;
+        if (channel === this.wrapperChannel) {
+            const channelBuf = this.writeUtf(innerChannel);
+            const payloadLenBuf = this.writeVarIntBuf(payload.length);
+            data = Buffer.concat([channelBuf, payloadLenBuf, payload]);
+        } else {
+            data = payload;
+        }
 
         this.client.write('login_plugin_response', {
             messageId: messageId,
@@ -127,7 +126,6 @@ class ForgeHandshakeStateMachine extends EventEmitter {
     }
 
     // --- Utilities ---
-
     readVarInt(buffer, offset) {
         let numRead = 0;
         let result = 0;
