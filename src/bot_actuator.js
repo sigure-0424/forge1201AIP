@@ -65,10 +65,14 @@ bot.once('inject_allowed', () => {
     const handshake = new ForgeHandshakeStateMachine(bot._client);
     
     handshake.on('handshake_complete', (registrySyncBuffer) => {
-        process.send({ type: 'LOG', data: `${botId} FML3 handshake complete. Injecting registries...` });
-        const injector = new DynamicRegistryInjector(bot.registry);
-        const parsed = injector.parseRegistryPayload(registrySyncBuffer);
-        injector.injectBlockToRegistry(parsed);
+        process.send({ type: 'LOG', data: `${botId} FML3 handshake complete. Scheduling registry injection...` });
+        
+        // Use a small delay to avoid blocking the initial PLAY state packet processing
+        setTimeout(() => {
+            const injector = new DynamicRegistryInjector(bot.registry);
+            const parsed = injector.parseRegistryPayload(registrySyncBuffer);
+            injector.injectBlockToRegistry(parsed);
+        }, 100);
     });
 
     // Handle packet parsing errors specifically

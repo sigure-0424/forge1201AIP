@@ -12,7 +12,7 @@ class ForgeHandshakeStateMachine extends EventEmitter {
 
         // Intercept incoming packets
         const packetListener = (data, meta) => {
-            if (this.client.state !== 'login') return;
+            if (this.client.state !== 'login' && !this.completed) return;
 
             if (meta.name === 'login_plugin_request') {
                 if (data.channel === this.wrapperChannel) {
@@ -20,7 +20,8 @@ class ForgeHandshakeStateMachine extends EventEmitter {
                 } else if (data.channel === this.innerChannel) {
                     this.handleFmlHandshake(data.messageId, data.data, this.innerChannel);
                 } else {
-                    // Acknowledge other plugins as unknown
+                    // Acknowledge unknown plugins with successful: false
+                    // This is cleaner than sending an empty success payload.
                     this.client.write('login_plugin_response', {
                         messageId: data.messageId,
                         successful: false
@@ -34,15 +35,28 @@ class ForgeHandshakeStateMachine extends EventEmitter {
         // Transition to PLAY state usually happens after the 'success' packet
         this.client.once('success', () => {
             if (!this.completed) {
+                console.log('[ForgeHandshake] Login Success received.');
                 this.completed = true;
-                this.emit('handshake_complete', this.registrySyncBuffer);
+                // Emit handshake_complete with a copy of the buffer to prevent race conditions
+                this.emit('handshake_complete', [...this.registrySyncBuffer]);
             }
-            this.client.removeListener('packet', packetListener);
+            // We keep the listener for a short time to catch any late handshake packets
+            setTimeout(() => {
+                this.client.removeListener('packet', packetListener);
+            }, 1000);
         });
     }
 
     handleLoginWrapper(packet) {
         const wrapperData = packet.data;
+        if (!wrapperData || wrapperData.length === 0) {
+            this.client.write('login_plugin_response', {
+                messageId: packet.messageId,
+                successful: false
+            });
+            return;
+        }
+
         try {
             // Read inner channel
             const { value: channelLen, bytesRead: clBr } = this.readVarInt(wrapperData, 0);
@@ -56,9 +70,15 @@ class ForgeHandshakeStateMachine extends EventEmitter {
             if (channelName === this.innerChannel) {
                 this.handleFmlHandshake(packet.messageId, payload, this.wrapperChannel, channelName);
             } else {
-                this.sendResponse(packet.messageId, this.wrapperChannel, channelName, Buffer.alloc(0));
+                // For unknown inner channels, respond with successful: false
+                console.log(`[ForgeHandshake] Unknown inner channel in wrapper: ${channelName}. Responding with false.`);
+                this.client.write('login_plugin_response', {
+                    messageId: packet.messageId,
+                    successful: false
+                });
             }
         } catch (e) {
+            console.error(`[ForgeHandshake] Failed to parse LoginWrapper: ${e.message}`);
             this.client.write('login_plugin_response', {
                 messageId: packet.messageId,
                 successful: false
@@ -67,13 +87,25 @@ class ForgeHandshakeStateMachine extends EventEmitter {
     }
 
     handleFmlHandshake(messageId, payload, responseChannel, innerChannelName = null) {
+        if (!payload || payload.length === 0) {
+            this.client.write('login_plugin_response', {
+                messageId: messageId,
+                successful: false
+            });
+            return;
+        }
+
         const disc = payload[0];
-        console.log(`[ForgeHandshake] Received discriminator ${disc} on ${responseChannel}`);
+        console.log(`[ForgeHandshake] Received discriminator ${disc} on ${responseChannel} (ID: ${messageId})`);
 
         if (disc === 5) {
-            // S2CModData - Forge source says "noResponse()" but we MUST acknowledge the plugin request
-            console.log('[ForgeHandshake] Received S2CModData. Sending Ack.');
-            this.sendResponse(messageId, responseChannel, innerChannelName || this.innerChannel, Buffer.from([99]));
+            // S2CModData - Forge source says "noResponse()".
+            // Sending successful: false is the safest way to acknowledge without sending a payload that might confuse the codec.
+            console.log('[ForgeHandshake] Received S2CModData. Responding with successful: false.');
+            this.client.write('login_plugin_response', {
+                messageId: messageId,
+                successful: false
+            });
         } else if (disc === 1) {
             // S2CModList
             const reply = this.buildModListReply(payload);
@@ -131,6 +163,7 @@ class ForgeHandshakeStateMachine extends EventEmitter {
         let result = 0;
         let read;
         do {
+            if (offset + numRead >= buffer.length) throw new Error('VarInt buffer overflow');
             read = buffer.readUInt8(offset + numRead);
             let value = (read & 0b01111111);
             result |= (value << (7 * numRead));
