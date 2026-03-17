@@ -21,9 +21,9 @@
   },
   "homepage": "https://github.com/sigure-0424/ProjectBase#readme",
   "dependencies": {
-    "@toml-tools/parser": "^1.0.0",
     "mineflayer": "^4.35.0",
     "mineflayer-pathfinder": "^2.4.5",
-    "prismarine-registry": "^1.11.0"
+    "prismarine-registry": "^1.11.0",
+    "smol-toml": "^1.6.0"
   }
 }

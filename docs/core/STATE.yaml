@@ -4,13 +4,14 @@ project_short_name: "Forge1201AIP"
 current_goal: "Implement autonomous AI player framework using Mineflayer for Minecraft 1.20.1 Forge environment, including FML3 handshakes and dynamic registry handling."
 active_tasks: []
 recent_changes:
-  - "2026-03-17: Created index.js as main entry point (TASK-20260317-001-create-main-entrypoint)"
-\
+  - "2026-03-17: Verified AgentManager recovery and integrated ConfigRAGParser with smol-toml (TASK-20260317-004)"
+  - "2026-03-17: Fixed 'unexpected tag end' and redundant handshake emissions (BUGFIX-20260317-001)"
+  - "2026-03-17: Implemented and verified middlewares (TASK-20260317-003-implement-middlewares)"
 decisions_index:
 \
 smoke_status:
-  last_run: "2026-03-16"
-  command: "node tests/smoke.js"
+  last_run: "2026-03-17"
+  command: "node tests/test_config_rag_parser.js && node tests/test_agent_manager_recovery.js && node tests/test_middlewares.js && node tests/test_fml3_handshake_logic_pure.js"
   result: "passed"
 hazards:
 \

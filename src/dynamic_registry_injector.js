@@ -5,34 +5,52 @@ class DynamicRegistryInjector {
         this.registry = registry;
     }
 
-    parseRegistryPayload(payloadBuffer) {
-        // Extracts ID mappings from the proxy buffer.
-        // In a complete implementation, this would parse NBT or custom Forge formats.
-        console.log('[DynamicRegistry] Parsing registry payload...');
+    parseRegistryPayload(payloadBuffers) {
+        console.log(`[DynamicRegistry] Parsing ${payloadBuffers.length} registry payload buffers...`);
+        const parsedEntries = [];
         
-        // Mock parsed entries
-        const parsedEntries = [
-            { id: 4001, name: 'create:andesite_alloy', type: 'item' },
-            { id: 4002, name: 'veinminer:vein_block', type: 'block' }
-        ];
+        // FML3 Registry packets often contain NBT snapshots.
+        // For now, we perform a heuristic scan for strings like "modid:item_name"
+        for (const buf of payloadBuffers) {
+            const str = buf.toString('utf8');
+            const matches = str.match(/[a-z0-9_.-]+:[a-z0-9_.-]+/g);
+            if (matches) {
+                for (const match of matches) {
+                    if (match.includes(':')) {
+                        // Avoid duplicates
+                        if (!parsedEntries.find(e => e.name === match)) {
+                            // Assign a high ID range for modded items to avoid Vanilla collisions
+                            const id = 10000 + parsedEntries.length;
+                            const type = match.includes('block') || match.includes('ore') ? 'block' : 'item';
+                            parsedEntries.push({ id, name: match, type });
+                        }
+                    }
+                }
+            }
+        }
         
+        console.log(`[DynamicRegistry] Heuristically discovered ${parsedEntries.length} modded entries.`);
         return parsedEntries;
     }
 
     injectBlockToRegistry(parsedEntries) {
-        // Generates object schemas for unknown mod blocks.
-        // Applies heuristic defaults: Hardness: 1.0, Diggable: true, BoundingBox: "block"
         console.log(`[DynamicRegistry] Injecting ${parsedEntries.length} entries into bot registry.`);
 
         for (const entry of parsedEntries) {
             if (entry.type === 'block') {
+                // Heuristic for bounding box
+                let boundingBox = 'block';
+                if (entry.name.includes('slab') || entry.name.includes('panel') || entry.name.includes('plate')) {
+                    boundingBox = 'empty'; // Slabs are often pathable
+                }
+
                 this.registry.blocks[entry.id] = {
                     id: entry.id,
                     name: entry.name,
                     displayName: entry.name,
                     hardness: 1.0,
                     diggable: true,
-                    boundingBox: 'block',
+                    boundingBox: boundingBox,
                     material: 'rock',
                     harvestTools: {}
                 };

@@ -1,6 +1,6 @@
 // config_rag_parser.js
 const fs = require('fs');
-const tomlParser = require('@toml-tools/parser');
+const toml = require('smol-toml');
 
 class ConfigRAGParser {
     constructor(configDir) {
@@ -21,7 +21,7 @@ class ConfigRAGParser {
             console.log(`[ConfigRAG] Parsing ${file}...`);
             try {
                 const content = fs.readFileSync(filePath, 'utf-8');
-                const parsed = tomlParser.parse(content);
+                const parsed = toml.parse(content);
                 this.extractConstraints(file, parsed);
             } catch (err) {
                 console.error(`[ConfigRAG] Failed to parse ${file}: ${err.message}`);
@@ -29,21 +29,18 @@ class ConfigRAGParser {
         }
     }
 
-    extractConstraints(filename, parsedAst) {
-        // Dummy logic to simulate extraction of limits (e.g., machine stress limits, cooldowns)
-        // This injects physical constraints into the LLM system prompt.
-        
+    extractConstraints(filename, parsed) {
         if (filename.includes('create')) {
             this.constraints.createMod = {
-                maxStress: 2048, // Mocked
-                baseSpeed: 16
+                maxStress: parsed.stress?.maxStress || 2048,
+                baseSpeed: parsed.general?.baseSpeed || 16
             };
         }
         
         if (filename.includes('veinminer')) {
             this.constraints.veinMiner = {
-                maxBlocks: 64, // Mocked
-                cooldownTicks: 20
+                maxBlocks: parsed.general?.maxBlocks || 64,
+                cooldownTicks: parsed.general?.cooldown || 20
             };
         }
     }
