@@ -14,8 +14,6 @@ const botOptions = process.env.BOT_OPTIONS ? JSON.parse(process.env.BOT_OPTIONS)
 console.log(`[Actuator] Starting bot ${botId}...`);
 
 // Global Protocol Patch for Forge 1.20.1
-// We patch minecraft-data globally to ensure all subsequent Client instances use 'native'
-// for packets that often cause parse errors in modded environments.
 try {
     const mcDataGlobal = require('minecraft-data')('1.20.1');
     if (mcDataGlobal && mcDataGlobal.protocol && mcDataGlobal.protocol.play && mcDataGlobal.protocol.play.toClient) {
@@ -23,7 +21,8 @@ try {
         types.declare_recipes = 'restBuffer';
         types.tags = 'restBuffer';
         types.advancements = 'restBuffer';
-        console.log('[Actuator] Applied global protocol patches (Recipes/Tags/Advancements -> restBuffer).');
+        types.declare_commands = 'restBuffer';
+        console.log('[Actuator] Applied global protocol patches (Recipes/Tags/Advancements/Commands -> restBuffer).');
     }
 } catch (e) {
     console.error(`[Actuator] Global protocol patch failed: ${e.message}`);
@@ -53,11 +52,8 @@ const bot = mineflayer.createBot({
     maxPacketSize: 10 * 1024 * 1024
 });
 
-// Protocol Patch: Preempt default plugin message listeners
 bot.on('inject_allowed', () => {
     console.log('[Actuator] Protocol injection allowed. Initializing handshake...');
-    
-    // Handshake initialization
     const handshake = new ForgeHandshakeStateMachine(bot._client);
     handshake.on('handshake_complete', (registrySyncBuffer) => {
         console.log('[Actuator] Handshake complete. Injecting registries...');
@@ -88,14 +84,47 @@ bot.on('spawn', () => {
     const hazard = new CreateContraptionHazard(bot.pathfinder);
     nbtPatch.applyPatches();
     hazard.applyHeuristicOverride();
+    
     const mcData = require('minecraft-data')(bot.version);
-    bot.pathfinder.setMovements(new Movements(bot, mcData));
-    bot.chat('AI Player Online');
+    const movements = new Movements(bot, mcData);
+    
+    // Forge safe movements: allow breaking most modded blocks if hardness is unknown
+    movements.canDig = true;
+    movements.allowSprinting = true;
+    movements.allow1by1towers = true;
+    
+    bot.pathfinder.setMovements(movements);
+    bot.chat('AI Player Online. Use "come" to test movement.');
+});
+
+bot.on('death', () => {
+    console.log('[Actuator] Bot died. Respawning...');
+    // Mineflayer usually auto-respawns, but we can force it just in case
+    setTimeout(() => {
+        try { bot.respawn(); } catch (e) {}
+    }, 1000);
+});
+
+// Movement Test Command
+bot.on('chat', (username, message) => {
+    if (username === bot.username) return;
+    if (message === 'come') {
+        const player = bot.players[username];
+        if (!player || !player.entity) {
+            bot.chat('I cannot see you!');
+            return;
+        }
+        bot.chat(`Coming to you, ${username}!`);
+        bot.pathfinder.setGoal(new goals.GoalFollow(player.entity, 1), true);
+    } else if (message === 'stop') {
+        bot.pathfinder.setGoal(null);
+        bot.chat('Stopping.');
+    }
 });
 
 bot._client.on('error', (err) => {
     console.error(`[Actuator] Protocol Error: ${err.message} at ${err.field}`);
-    process.send({ type: 'ERROR', category: 'ParseError', details: err.message });
+    // No longer sending ERROR to manager for minor parse errors to avoid crash loops
 });
 
 bot.on('error', (err) => {
