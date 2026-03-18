@@ -1,13 +1,22 @@
-// mock_bot_error.js
-console.log('Mock bot started.');
-process.send({ type: 'LOG', data: 'Mock bot is running.' });
+const assert = require('assert');
+const mineflayer = require('mineflayer');
+const { Movements } = require('mineflayer-pathfinder');
+const DynamicRegistryInjector = require('../src/dynamic_registry_injector');
+const mcData = require('minecraft-data')('1.20.1');
 
-// Trigger an error after a short delay
-setTimeout(() => {
-    process.send({ type: 'ERROR', category: 'HandshakeTimeout', details: 'FML3 handshake timed out after 10s' });
-}, 500);
+const registry = require('prismarine-registry')('1.20.1');
+const injector = new DynamicRegistryInjector(registry);
 
-// Keep alive for a bit
-setTimeout(() => {
-    process.exit(0);
-}, 2000);
+const parsed = [
+    { type: 'block', name: 'create:andesite_alloy', id: 30000 }
+];
+
+injector.injectBlockToRegistry(parsed);
+
+const bot = { registry: registry, version: '1.20.1' };
+try {
+    const movements = new Movements(bot, mcData);
+    console.log("Movements init successful. No crash!");
+} catch(e) {
+    console.log(e);
+}

@@ -92,13 +92,27 @@ class DynamicRegistryInjector {
                         states: [],
                         drops: [],
                         material: "rock",
-                        harvestTools: {}
+                        harvestTools: {},
+                        shapes: [ [0, 0, 0, 1, 1, 1] ]
                     };
 
                     this.registry.blocks[entry.id] = dummyBlock;
+
                     if (this.registry.blocksByStateId) {
                         this.registry.blocksByStateId[entry.id] = dummyBlock;
                     }
+
+                    if (this.registry.blocksArray) {
+                        this.registry.blocksArray.push(dummyBlock);
+                    }
+
+                    // Prismarine-block will dynamically overwrite shapes on initialization based on blockCollisionShapes.
+                    // If we don't add the mod block name to blockCollisionShapes, it gets overwritten with undefined.
+                    if (this.registry.blockCollisionShapes && this.registry.blockCollisionShapes.blocks) {
+                        // Inherit stone's collision shape mapping to ensure a solid full block
+                        this.registry.blockCollisionShapes.blocks[dummyBlock.name] = this.registry.blockCollisionShapes.blocks['stone'];
+                    }
+
                     dummyCount++;
                 }
             } else if (entry.type === 'item') {
