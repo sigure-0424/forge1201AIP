@@ -67,14 +67,13 @@ bot.on('spawn', () => {
     const pos = bot.entity.position;
     console.log(`[Actuator] Bot spawned at ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`);
     
-    bot.physics.enabled = true;
     bot.entity.velocity.set(0, 0, 0);
 
     // Movements Setup
     const movements = new Movements(bot, mcData); 
     movements.canDig = true;
     movements.allowSprinting = true;
-    movements.allow1by1towers = false; 
+    movements.allow1by1towers = true;
     movements.digCost = 10;
     movements.placeCost = 10;
     
@@ -93,34 +92,26 @@ bot.on('spawn', () => {
     }, 10000);
 });
 
-// PHYSICS GUARD: Detect and Correct Desync
-let airTicks = 0;
-bot.on('physicsTick', () => {
-    if (!bot.entity) return;
-    const pos = bot.entity.position;
-    
-    // 1. Forced Fall: If there is air below, we must fall.
-    const blockBelow = bot.blockAt(pos.offset(0, -0.1, 0));
-    if (blockBelow && (blockBelow.type === 0 || blockBelow.name === 'air')) {
-        if (bot.entity.onGround) {
-            bot.entity.onGround = false;
-        }
-        airTicks++;
-    } else {
-        airTicks = 0;
-    }
-
-    // 2. Anti-Stall: If we've been in air for > 5s without velocity, nudge
-    if (airTicks > 100 && bot.entity.velocity.y === 0 && !bot.pathfinder.isMoving()) {
-        console.warn('[Actuator] Bot is floating! Applying gravity nudge.');
-        bot.entity.velocity.y = -0.05;
-    }
-});
-
 // SERVER VELOCITY SYNC
 bot._client.on('entity_velocity', (packet) => {
     if (packet.entityId === bot.entity.id) {
         console.log(`[Actuator] Recv Knockback: ${packet.velocityX}, ${packet.velocityY}, ${packet.velocityZ}`);
+        // The server sends velocity as 1/8000th of a block per tick.
+        bot.entity.velocity.set(packet.velocityX / 8000, packet.velocityY / 8000, packet.velocityZ / 8000);
+    }
+});
+
+// PASSIVE PHYSICS FALLBACK: Prevent floating when chunks are unloaded
+bot.on('physicsTick', () => {
+    if (!bot.entity) return;
+    const pos = bot.entity.position;
+    // When the bot is in an unloaded chunk, Mineflayer's physics engine simply returns without
+    // updating gravity, causing the bot to float. To "treat the server as the source of truth"
+    // and passively fall, we manually apply gravity if the block underneath cannot be resolved.
+    if (bot.blockAt(pos) == null) {
+        bot.entity.velocity.y -= 0.08; // gravity
+        bot.entity.velocity.y *= 0.98; // drag
+        bot.entity.position.add(bot.entity.velocity);
     }
 });
 
