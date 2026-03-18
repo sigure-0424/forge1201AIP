@@ -8,9 +8,9 @@
 Starting Agent Manager...
 Target Server: localhost:25565
 [AgentManager] Starting bot process for AI_Bot_01...
-[Bot AI_Bot_01] Actuator for AI_Bot_01 starting up...
-[Bot AI_Bot_01] Applied global NBT leniency patch.
-[Bot AI_Bot_01] AI_Bot_01 client injected, initializing FML3 handshake.
+[Actuator] Starting AI_Bot_01 for Forge 1.20.1...
+[Actuator] Protocol bypasses and NBT leniency applied.
+[Actuator] Connection allowed. Starting handshake machine...
 Error: connect ECONNREFUSED 127.0.0.1:25565
     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
   errno: -111,
@@ -19,24 +19,17 @@ Error: connect ECONNREFUSED 127.0.0.1:25565
   address: '127.0.0.1',
   port: 25565
 }
+[Actuator] Bot Error: connect ECONNREFUSED 127.0.0.1:25565
+[Actuator] Disconnected from server.
 [AgentManager] Received ERROR from bot AI_Bot_01: BotError - connect ECONNREFUSED 127.0.0.1:25565
 [AgentManager] Triggering recovery pipeline for AI_Bot_01, category: BotError
 [Recovery] General bot error. Attempting restart...
-[AgentManager] Received ERROR from bot AI_Bot_01: ParseError - Parse error for undefined: connect ECONNREFUSED 127.0.0.1:25565
-[AgentManager] Triggering recovery pipeline for AI_Bot_01, category: ParseError
-[Recovery] Detected protocol parse error. This often happens with modded recipes in Forge 1.20.1.
-[Recovery] Restarting bot AI_Bot_01 with relaxed protocol rules.
 [AgentManager] Bot process AI_Bot_01 exited with code null and signal SIGKILL
 [AgentManager] Restarting AI_Bot_01...
 [AgentManager] Starting bot process for AI_Bot_01...
-[AgentManager] Restarting AI_Bot_01...
-[AgentManager] Starting bot process for AI_Bot_01...
-[Bot AI_Bot_01] Actuator for AI_Bot_01 starting up...
-[Bot AI_Bot_01] Applied global NBT leniency patch.
-[Bot AI_Bot_01] Actuator for AI_Bot_01 starting up...
-[Bot AI_Bot_01] Applied global NBT leniency patch.
-[Bot AI_Bot_01] AI_Bot_01 client injected, initializing FML3 handshake.
-[Bot AI_Bot_01] AI_Bot_01 client injected, initializing FML3 handshake.
+[Actuator] Starting AI_Bot_01 for Forge 1.20.1...
+[Actuator] Protocol bypasses and NBT leniency applied.
+[Actuator] Connection allowed. Starting handshake machine...
 Error: connect ECONNREFUSED 127.0.0.1:25565
     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
   errno: -111,
@@ -45,15 +38,32 @@ Error: connect ECONNREFUSED 127.0.0.1:25565
   address: '127.0.0.1',
   port: 25565
 }
+[Actuator] Bot Error: connect ECONNREFUSED 127.0.0.1:25565
+[Actuator] Disconnected from server.
 [AgentManager] Received ERROR from bot AI_Bot_01: BotError - connect ECONNREFUSED 127.0.0.1:25565
 [AgentManager] Triggering recovery pipeline for AI_Bot_01, category: BotError
 [Recovery] General bot error. Attempting restart...
-[AgentManager] Received ERROR from bot AI_Bot_01: ParseError - Parse error for undefined: connect ECONNREFUSED 127.0.0.1:25565
-[AgentManager] Triggering recovery pipeline for AI_Bot_01, category: ParseError
-[Recovery] Detected protocol parse error. This often happens with modded recipes in Forge 1.20.1.
-[Recovery] Restarting bot AI_Bot_01 with relaxed protocol rules.
 [AgentManager] Bot process AI_Bot_01 exited with code null and signal SIGKILL
 [AgentManager] Restarting AI_Bot_01...
 [AgentManager] Starting bot process for AI_Bot_01...
+[Actuator] Starting AI_Bot_01 for Forge 1.20.1...
+[Actuator] Protocol bypasses and NBT leniency applied.
+[Actuator] Connection allowed. Starting handshake machine...
+Error: connect ECONNREFUSED 127.0.0.1:25565
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 25565
+}
+[Actuator] Bot Error: connect ECONNREFUSED 127.0.0.1:25565
+[AgentManager] Received ERROR from bot AI_Bot_01: BotError - connect ECONNREFUSED 127.0.0.1:25565
+[Actuator] Disconnected from server.
+[AgentManager] Triggering recovery pipeline for AI_Bot_01, category: BotError
+[Recovery] General bot error. Attempting restart...
+[AgentManager] Bot process AI_Bot_01 exited with code null and signal SIGKILL
 [AgentManager] Restarting AI_Bot_01...
 [AgentManager] Starting bot process for AI_Bot_01...
+[Actuator] Starting AI_Bot_01 for Forge 1.20.1...
+[Actuator] Protocol bypasses and NBT leniency applied.

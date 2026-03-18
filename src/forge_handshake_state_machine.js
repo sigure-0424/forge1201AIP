@@ -24,13 +24,11 @@ class ForgeHandshakeStateMachine extends EventEmitter {
                 } else if (data.channel === this.innerChannel) {
                     this.handleFmlHandshake(data.messageId, data.data, this.innerChannel);
                 } else {
-                    // Gold Standard: Always acknowledge with successful: true and a dummy payload
-                    // This prevents 'Received empty payload' errors on Forge SIMPLENET codecs.
-                    console.log(`[ForgeHandshake] Acknowledging unknown channel: ${data.channel}`);
+                    console.log(`[ForgeHandshake] Unknown channel: ${data.channel}. Sending empty response.`);
                     this.client.write('login_plugin_response', {
                         messageId: data.messageId,
                         successful: true,
-                        data: Buffer.from([99]) // Generic FML Ack
+                        data: null
                     });
                 }
             }
@@ -69,10 +67,11 @@ class ForgeHandshakeStateMachine extends EventEmitter {
             const { value: payloadLen, bytesRead: plBr } = this.readVarInt(payloadWrapper, 0);
             const payload = payloadWrapper.subarray(plBr, plBr + payloadLen);
 
+            console.log(`[ForgeHandshake] Wrapper inner channel: ${channelName}`);
+
             if (channelName === this.innerChannel) {
                 this.handleFmlHandshake(packet.messageId, payload, this.wrapperChannel, channelName);
             } else {
-                console.log(`[ForgeHandshake] Wrapper inner channel: ${channelName}. Sending Ack.`);
                 this.sendAck(packet.messageId, this.wrapperChannel, channelName);
             }
         } catch (e) {
@@ -88,15 +87,18 @@ class ForgeHandshakeStateMachine extends EventEmitter {
         }
 
         const disc = payload[0];
-        console.log(`[ForgeHandshake] Disc ${disc} on ${responseChannel}`);
+        console.log(`[ForgeHandshake] Disc ${disc} on ${responseChannel} (Inner: ${innerChannelName || 'none'})`);
 
         if (disc === 1) {
             const reply = this.buildModListReply(payload);
             this.sendResponse(messageId, responseChannel, innerChannelName || this.innerChannel, reply);
-        } else if (disc === 3 || disc === 4 || disc === 5 || disc === 6) {
-            // Disc 3: RegistryData, Disc 4: Ack, Disc 5: ModData/ConfigData, Disc 6: RegistrySync
+        } else if (disc === 3 || disc === 4 || disc === 6) {
+            // Disc 3: RegistryData, Disc 4: Ack, Disc 6: RegistrySync
             this.sendAck(messageId, responseChannel, innerChannelName || this.innerChannel);
             if (disc === 3) this.registrySyncBuffer.push(payload);
+        } else if (disc === 5) {
+            // Disc 5: S2CModData - Forge Spec says 'noResponse()'
+            console.log('[ForgeHandshake] Skipping response for Disc 5.');
         } else if (disc === 0) {
             this.sendResponse(messageId, responseChannel, innerChannelName || this.innerChannel, Buffer.from([1, 3]));
         } else {

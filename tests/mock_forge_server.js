@@ -65,14 +65,14 @@ class MockForgeServer extends EventEmitter {
         const disc = payload[0];
         console.log(`[MockServer] Received client response on ${channelName}, discriminator: ${disc}`);
 
-        if (disc === 1) {
+                if (disc === 1) {
             console.log('[MockServer] Received ClientHello. Sending ModList (Disc 1)');
             const modList = this.buildModList();
             this.sendFmlPacket(client, 1, modList, 2);
         } else if (disc === 2) {
             console.log('[MockServer] Received ModListReply. Sending Registry (Disc 3)');
             this.sendFmlPacket(client, 3, Buffer.from([0x03, 0x00]), 3); 
-        } else if (disc === 99) {
+        } else if (disc === 4 || disc === 99) {
             console.log('[MockServer] Received HandshakeAck. Completing login.');
             client.write('success', {
                 uuid: '00000000-0000-0000-0000-000000000000',

@@ -4,14 +4,20 @@ project_short_name: "Forge1201AIP"
 current_goal: "Implement autonomous AI player framework using Mineflayer for Minecraft 1.20.1 Forge environment, including FML3 handshakes and dynamic registry handling."
 active_tasks: []
 recent_changes:
+  - "2026-03-18: Resolved fatal positional desync and fixed 'frozen' physics after digging (BUGFIX-20260318-004)"
+  - "2026-03-18: Fixed 'flying' kick and improved physics stabilization (BUGFIX-20260318-003)"
+  - "2026-03-18: Fixed modded block interaction issues (movement stasis, passive damage, and logout crash) (BUGFIX-20260318-002)"
+  - "2026-03-18: Aligned documentation (BUGFIX records, variable map) and verified state (TASK-20260318-002)"
+  - "2026-03-18: Fixed 'unexpected tag end' crash and infinite login loop by bypassing problematic packets (declare_recipes, tags, advancements) and disabling ProtoDef compiler (BUGFIX-20260318-001)"
+  - "2026-03-18: Implemented and verified E2E integration test with MockForgeServer (TASK-20260318-001)"
   - "2026-03-17: Verified AgentManager recovery and integrated ConfigRAGParser with smol-toml (TASK-20260317-004)"
   - "2026-03-17: Fixed 'unexpected tag end' and redundant handshake emissions (BUGFIX-20260317-001)"
   - "2026-03-17: Implemented and verified middlewares (TASK-20260317-003-implement-middlewares)"
 decisions_index:
 \
 smoke_status:
-  last_run: "2026-03-17"
-  command: "node tests/test_config_rag_parser.js && node tests/test_agent_manager_recovery.js && node tests/test_middlewares.js && node tests/test_fml3_handshake_logic_pure.js"
+  last_run: "2026-03-18"
+  command: "node tests/test_e2e_integration.js"
   result: "passed"
 hazards:
 \

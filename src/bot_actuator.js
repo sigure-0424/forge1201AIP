@@ -8,162 +8,164 @@ const InventoryNBTPatch = require('./inventory_nbt_patch');
 const CreateContraptionHazard = require('./create_contraption_hazard');
 const nbt = require('prismarine-nbt');
 
+// Robust Crash Protection
+process.on('uncaughtException', (err) => {
+    console.error(`[Actuator] CRITICAL UNCAUGHT EXCEPTION: ${err.message}`);
+    console.error(err.stack);
+    process.send({ type: 'ERROR', category: 'BotError', details: err.message });
+});
+
 const botId = process.env.BOT_ID || 'Bot';
 const botOptions = process.env.BOT_OPTIONS ? JSON.parse(process.env.BOT_OPTIONS) : {};
 
-console.log(`[Actuator] Starting bot ${botId}...`);
+console.log(`[Actuator] Starting ${botId} for Forge 1.20.1...`);
 
-// Global Protocol Patch for Forge 1.20.1
+// Global Protocol/NBT Bypasses
 try {
     const mcDataGlobal = require('minecraft-data')('1.20.1');
-    if (mcDataGlobal && mcDataGlobal.protocol && mcDataGlobal.protocol.play && mcDataGlobal.protocol.play.toClient) {
-        const types = mcDataGlobal.protocol.play.toClient.types;
-        // Bypassing all problematic modded packets to prevent protocol stream desync
-        const bypass = ['declare_recipes', 'tags', 'advancements', 'declare_commands', 'unlock_recipes', 'craft_recipe_response', 'nbt_query_response'];
-        for (const p of bypass) {
-            types[p] = 'restBuffer';
-            if (types['packet_' + p]) types['packet_' + p] = 'restBuffer';
-        }
-        console.log('[Actuator] Applied global protocol bypasses.');
-    }
-} catch (e) {
-    console.error(`[Actuator] Global protocol patch failed: ${e.message}`);
-}
-
-// Global NBT Patch for Forge 1.20.1
-try {
+    const types = mcDataGlobal.protocol.play.toClient.types;
+    const bypass = ['declare_recipes', 'tags', 'advancements', 'declare_commands', 'unlock_recipes', 'craft_recipe_response', 'nbt_query_response'];
+    bypass.forEach(p => { 
+        types[p] = 'restBuffer'; 
+        if (types['packet_' + p]) types['packet_' + p] = 'restBuffer'; 
+    });
+    
     const nbtProto = nbt.protos.big;
     const originalRead = nbtProto.read;
     nbtProto.read = function (buffer, offset) {
-        try {
-            return originalRead.call(this, buffer, offset);
-        } catch (e) {
-            return nbtProto.readAnon(buffer, offset);
-        }
+        try { return originalRead.call(this, buffer, offset); } catch (e) { return nbtProto.readAnon(buffer, offset); }
     };
-    console.log('[Actuator] Applied global NBT leniency patch.');
-} catch (e) {
-    console.error(`[Actuator] NBT patch failed: ${e.message}`);
-}
+    console.log('[Actuator] Protocol bypasses and NBT leniency applied.');
+} catch (e) { console.error(`[Actuator] Patch failed: ${e.message}`); }
 
 const bot = mineflayer.createBot({
     host: (botOptions.host || 'localhost') + '\0FML3\0',
     port: botOptions.port || 25565,
     username: botId,
     version: '1.20.1',
-    maxPacketSize: 10 * 1024 * 1024
+    maxPacketSize: 10 * 1024 * 1024,
+    disableChatSigning: true
 });
 
+const mcData = require('minecraft-data')(bot.version);
+
 bot.on('inject_allowed', () => {
-    console.log('[Actuator] Protocol injection allowed. Initializing handshake...');
+    console.log('[Actuator] Connection allowed. Starting handshake machine...');
     const handshake = new ForgeHandshakeStateMachine(bot._client);
     handshake.on('handshake_complete', (registrySyncBuffer) => {
-        console.log('[Actuator] Handshake complete. Injecting registries...');
-        setTimeout(() => {
-            const injector = new DynamicRegistryInjector(bot.registry);
-            const parsed = injector.parseRegistryPayload(registrySyncBuffer);
-            injector.injectBlockToRegistry(parsed);
-            
-            // Solid block proxy to prevent void death and pathfinder paralysis
-            const defaultBlock = { 
-                id: 0, 
-                name: 'mod_block', 
-                displayName: 'Mod Block', 
-                boundingBox: 'block', 
-                hardness: 1, 
-                diggable: true,
-                transparent: false,
-                material: 'rock',
-                states: []
-            };
-
-            const handler = {
-                get: (target, prop) => {
-                    if (prop in target) return target[prop];
-                    if (!isNaN(prop)) {
-                        const id = parseInt(prop);
-                        return { ...defaultBlock, id };
-                    }
-                    return undefined;
-                }
-            };
-            bot.registry.blocks = new Proxy(bot.registry.blocks, handler);
-            console.log('[Actuator] Applied comprehensive block proxy for modded IDs.');
-        }, 100);
+        console.log('[Actuator] Handshake finalized. Injecting registries...');
+        const injector = new DynamicRegistryInjector(bot.registry);
+        const parsed = injector.parseRegistryPayload(registrySyncBuffer);
+        injector.injectBlockToRegistry(parsed);
+        bot.hazards = new Set();
     });
 });
 
 bot.loadPlugin(pathfinder);
 
 bot.on('spawn', () => {
-    console.log('[Actuator] Bot spawned.');
+    const pos = bot.entity.position;
+    console.log(`[Actuator] Bot spawned at ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`);
     
-    // Ensure registry consistency
-    if (!bot.registry.tags) bot.registry.tags = {};
+    bot.physics.enabled = true;
+    bot.entity.velocity.set(0, 0, 0);
 
-    const debouncer = new EventDebouncer(bot);
-    const nbtPatch = new InventoryNBTPatch(bot);
-    const hazard = new CreateContraptionHazard(bot.pathfinder);
-    nbtPatch.applyPatches();
-    hazard.applyHeuristicOverride();
-    
-    const mcData = require('minecraft-data')(bot.version);
-    const movements = new Movements(bot, mcData);
-    
-    // Forge safe movements: allow breaking and walking on modded blocks
+    // Movements Setup
+    const movements = new Movements(bot, mcData); 
     movements.canDig = true;
     movements.allowSprinting = true;
-    movements.allow1by1towers = true;
-    movements.allowParkour = true;
-    movements.digCost = 1;
-    movements.placeCost = 1;
+    movements.allow1by1towers = false; 
+    movements.digCost = 10;
+    movements.placeCost = 10;
     
     bot.pathfinder.setMovements(movements);
-    console.log('[Actuator] Pathfinder movements configured (Permissive Mode).');
+    bot.pathfinder.thinkTimeout = 4000; // Cap pathfinding time to prevent lockup
+    
+    console.log('[Actuator] Pathfinder and Physics initialized.');
+    bot.chat('Forge AI Player Ready.');
 
-    bot.chat('AI Player Online. Use "come" to test movement.');
-});
-
-// Pathfinder Debugging (Events are on bot, not bot.pathfinder)
-bot.on('path_update', (r) => {
-    if (r.status === 'success') console.log(`[Pathfinder] Path found: ${r.path.length} nodes.`);
-    else console.log(`[Pathfinder] Path failed: ${r.status}`);
-});
-bot.on('goal_reached', () => console.log('[Pathfinder] Goal reached!'));
-
-bot.on('death', () => {
-    console.log('[Actuator] Bot died. Respawning...');
-    setTimeout(() => {
-        try { bot.respawn(); } catch (e) {}
-    }, 1000);
-});
-
-// Movement Test Command
-bot.on('chat', (username, message) => {
-    if (username === bot.username) return;
-    if (message === 'come' || message === 'look') {
-        const player = bot.players[username];
-        if (!player || !player.entity) {
-            bot.chat('I cannot see you!');
-            return;
+    // Periodic Heartbeat
+    setInterval(() => {
+        if (bot.entity) {
+            const p = bot.entity.position;
+            console.log(`[Heartbeat] Pos: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)} | Ground: ${bot.entity.onGround} | Health: ${bot.health.toFixed(1)}`);
         }
-        
-        bot.lookAt(player.entity.position.offset(0, player.entity.height, 0));
-        
-        if (message === 'come') {
-            bot.chat(`Coming to you, ${username}!`);
-            bot.pathfinder.setGoal(new goals.GoalFollow(player.entity, 1), true);
-        } else {
-            bot.chat('Looking at you!');
+    }, 10000);
+});
+
+// PHYSICS GUARD: Detect and Correct Desync
+let airTicks = 0;
+bot.on('physicsTick', () => {
+    if (!bot.entity) return;
+    const pos = bot.entity.position;
+    
+    // 1. Forced Fall: If there is air below, we must fall.
+    const blockBelow = bot.blockAt(pos.offset(0, -0.1, 0));
+    if (blockBelow && (blockBelow.type === 0 || blockBelow.name === 'air')) {
+        if (bot.entity.onGround) {
+            bot.entity.onGround = false;
         }
-    } else if (message === 'stop') {
-        bot.pathfinder.setGoal(null);
-        bot.chat('Stopping.');
+        airTicks++;
+    } else {
+        airTicks = 0;
+    }
+
+    // 2. Anti-Stall: If we've been in air for > 5s without velocity, nudge
+    if (airTicks > 100 && bot.entity.velocity.y === 0 && !bot.pathfinder.isMoving()) {
+        console.warn('[Actuator] Bot is floating! Applying gravity nudge.');
+        bot.entity.velocity.y = -0.05;
     }
 });
 
-bot._client.on('error', (err) => {
-    console.error(`[Actuator] Protocol Error: ${err.message} at ${err.field}`);
+// SERVER VELOCITY SYNC
+bot._client.on('entity_velocity', (packet) => {
+    if (packet.entityId === bot.entity.id) {
+        console.log(`[Actuator] Recv Knockback: ${packet.velocityX}, ${packet.velocityY}, ${packet.velocityZ}`);
+    }
+});
+
+// Chat Command Handler
+bot.on('chat', (username, message) => {
+    if (username === bot.username) return;
+    const parts = message.toLowerCase().split(' ');
+    const cmd = parts[0];
+
+    try {
+        if (cmd === 'come') {
+            const player = bot.players[username];
+            if (!player || !player.entity) {
+                bot.chat('I cannot see you!');
+                return;
+            }
+            bot.chat(`Coming to you, ${username}!`);
+            const goal = new goals.GoalFollow(player.entity, 1);
+            bot.pathfinder.setGoal(goal, true);
+        } else if (cmd === 'status') {
+            const p = bot.entity.position;
+            bot.chat(`Pos: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)} | HP: ${bot.health.toFixed(0)} | Ground: ${bot.entity.onGround}`);
+        } else if (cmd === 'stop') {
+            bot.pathfinder.setGoal(null);
+            bot.chat('Stopped.');
+        }
+    } catch (e) {
+        console.error(`[Actuator] Chat Command Error: ${e.message}`);
+    }
+});
+
+// Pathfinder Debugging
+bot.on('path_update', (r) => {
+    if (r.status === 'success') {
+        const goal = r.to || (r.path && r.path.length > 0 ? r.path[r.path.length - 1] : null);
+        if (goal) console.log(`[Pathfinder] Path found to ${goal.x.toFixed(1)}, ${goal.y.toFixed(1)}, ${goal.z.toFixed(1)}`);
+    } else if (r.status !== 'partial') {
+        console.log(`[Pathfinder] Failed: ${r.status}`);
+    }
+});
+
+// Global Error Handling
+bot.on('kicked', (reason) => {
+    console.log(`[Actuator] Kicked: ${reason}`);
+    process.send({ type: 'ERROR', category: 'Kicked', details: reason });
 });
 
 bot.on('error', (err) => {
@@ -171,11 +173,4 @@ bot.on('error', (err) => {
     process.send({ type: 'ERROR', category: 'BotError', details: err.message });
 });
 
-bot.on('kicked', (reason) => {
-    console.log(`[Actuator] Kicked: ${reason}`);
-    process.send({ type: 'ERROR', category: 'Kicked', details: reason });
-});
-
-bot.on('end', () => {
-    console.log('[Actuator] Connection ended.');
-});
+bot.on('end', () => console.log('[Actuator] Disconnected from server.'));

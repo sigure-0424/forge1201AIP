@@ -42,13 +42,14 @@ class AgentManager {
     handleIPCMessage(botId, message) {
         if (message.type === 'ERROR') {
             console.error(`[AgentManager] Received ERROR from bot ${botId}: ${message.category} - ${message.details}`);
-            this.triggerRecoveryPipeline(botId, message.category);
+            this.triggerRecoveryPipeline(botId, message);
         } else if (message.type === 'LOG') {
             console.log(`[Bot ${botId}] ${message.data}`);
         }
     }
 
-    triggerRecoveryPipeline(botId, category) {
+    triggerRecoveryPipeline(botId, message) {
+        const category = message.category;
         if (this.restartingBots.has(botId)) {
             console.log(`[AgentManager] Bot ${botId} is already restarting. Ignoring duplicate recovery trigger.`);
             return;
@@ -77,11 +78,18 @@ class AgentManager {
             case 'StackOverflow':
                 console.log(`[Recovery] Updating LLM prompt for ${botId} with 'Inaccessible Area' rule.`);
                 break;
-            case 'NBTError':
-                console.log(`[Recovery] Instructing ${botId} to re-open inventory to refresh packets.`);
+            case 'Kicked':
+                if (message.details.includes('flying')) {
+                    console.log(`[Recovery] Bot kicked for flying. This is common in modded environments. Restarting with delay...`);
+                    this.scheduleRestart(botId);
+                } else {
+                    console.log(`[Recovery] Bot kicked: ${message.details}. Attempting restart...`);
+                    this.scheduleRestart(botId);
+                }
                 break;
             default:
-                console.log(`[Recovery] Unknown error category. No automated recovery.`);
+                console.log(`[Recovery] Unknown error category. Attempting generic restart...`);
+                this.scheduleRestart(botId);
         }
     }
 

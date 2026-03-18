@@ -1,0 +1,403 @@
+PS C:\Users\sigure\MyDrive\Projects\MinecraftAIbot\forge1201AIP> node index.js
+--- Minecraft Forge 1.20.1 AI Player System ---
+[ConfigRAG] Parsing create-common.toml...
+[ConfigRAG] Parsing veinminer-common.toml...
+=== SERVER CONSTRAINTS ===
+- Create Mod: Max Stress = 4096, Base Speed = 16
+- VeinMiner: Max Blocks per vein = 128, Cooldown = 10 ticks
+
+Starting Agent Manager...
+Target Server: localhost:25565
+[AgentManager] Starting bot process for AI_Bot_01...
+[Actuator] Initializing AI_Bot_01...
+[Actuator] Global protocol/NBT patches applied.
+[Actuator] Handshake started...
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 0)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 5 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 1)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 1 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 2)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 3)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 4)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 5)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 6)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 7)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 8)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 9)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 10)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 11)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 12)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 13)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 14)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 15)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 16)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 17)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 18)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 19)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 20)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 21)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 22)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 23)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 24)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 25)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 26)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 27)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 28)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 29)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 30)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 31)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 32)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 33)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 34)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 35)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Login Success. Handshake complete.
+[Actuator] Handshake complete. Processing registries...
+[DynamicRegistry] Scanning 22 buffers...
+[DynamicRegistry] Injecting 5488 entries...
+[DynamicRegistry] Injection complete.
+[Actuator] Spawned at 20.3, 69.0, -3.5
+[Actuator] Pathfinder ready.
+[Actuator] Kicked: {"translate":"multiplayer.disconnect.flying"}
+[Actuator] Disconnected.
+[AgentManager] Received ERROR from bot AI_Bot_01: Kicked - {"translate":"multiplayer.disconnect.flying"}
+[AgentManager] Triggering recovery pipeline for AI_Bot_01, category: Kicked
+[Recovery] Bot kicked for flying. This is common in modded environments. Restarting with delay...
+[AgentManager] Bot process AI_Bot_01 exited with code null and signal SIGKILL
+[AgentManager] Restarting AI_Bot_01...
+[AgentManager] Starting bot process for AI_Bot_01...
+[Actuator] Initializing AI_Bot_01...
+[Actuator] Global protocol/NBT patches applied.
+[Actuator] Handshake started...
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 0)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 5 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 1)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 1 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 2)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 3)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 4)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 5)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 6)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 7)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 8)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 9)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 10)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 11)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 12)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 13)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 14)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 15)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 16)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 17)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 18)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 19)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 20)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 21)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 22)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 23)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 24)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 25)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 26)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 27)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 28)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 29)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 30)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 31)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 32)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 33)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 34)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 35)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Login Success. Handshake complete.
+[Actuator] Handshake complete. Processing registries...
+[DynamicRegistry] Scanning 22 buffers...
+[DynamicRegistry] Injecting 5488 entries...
+[DynamicRegistry] Injection complete.
+[Actuator] Spawned at 20.3, 69.0, -3.5
+[Actuator] Pathfinder ready.
+[Actuator] Kicked: {"translate":"multiplayer.disconnect.flying"}
+[AgentManager] Received ERROR from bot AI_Bot_01: Kicked - {"translate":"multiplayer.disconnect.flying"}
+[Actuator] Disconnected.
+[AgentManager] Triggering recovery pipeline for AI_Bot_01, category: Kicked
+[Recovery] Bot kicked for flying. This is common in modded environments. Restarting with delay...
+[AgentManager] Bot process AI_Bot_01 exited with code null and signal SIGKILL
+[AgentManager] Restarting AI_Bot_01...
+[AgentManager] Starting bot process for AI_Bot_01...
+[Actuator] Initializing AI_Bot_01...
+[Actuator] Global protocol/NBT patches applied.
+[Actuator] Handshake started...
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 0)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 5 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 1)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 1 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 2)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 3)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 4)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 5)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 6)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 7)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 8)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 9)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 10)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 11)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 12)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 13)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 14)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 15)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 16)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 17)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 18)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 19)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 20)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 21)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 22)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 23)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 3 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 24)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 25)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 26)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 27)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 28)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 29)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 30)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 31)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 32)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 33)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 34)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Request for channel: fml:loginwrapper (ID: 35)
+[ForgeHandshake] Wrapper inner channel: fml:handshake
+[ForgeHandshake] Disc 4 on fml:loginwrapper (Inner: fml:handshake)
+[ForgeHandshake] Login Success. Handshake complete.
+[Actuator] Handshake complete. Processing registries...
+[DynamicRegistry] Scanning 22 buffers...
+[DynamicRegistry] Injecting 5488 entries...
+[DynamicRegistry] Injection complete.
+
+[Main] Shutting down AI Player System...
+[Main] Killing bot process AI_Bot_01
+PS C:\Users\sigure\MyDrive\Projects\MinecraftAIbot\forge1201AIP> 
+
+
+Server Log
+
+[19:03:17] [Netty Server IO #16/ERROR] [ne.mi.ne.HandshakeHandler/FMLHANDSHAKE]: Recieved unexpected index 0 in client reply
+[19:03:19] [Server thread/INFO] [minecraft/PlayerList]: AI_Bot_01[/[::1]:64493] logged in with entity id 66296 at (20.3, 69.0, -3.5)
+[19:03:19] [Server thread/INFO] [ModernFix/]: Using enhanced recipe sync for player AI_Bot_01
+[19:03:19] [Server thread/INFO] [minecraft/MinecraftServer]: AI_Bot_01 joined the game
+[19:03:20] [Server thread/INFO] [minecraft/MinecraftServer]: [Not Secure] <AI_Bot_01> AI Player Online.
+[19:03:31] [Server thread/INFO] [minecraft/MinecraftServer]: [Not Secure] <Seia_Y> come
+[19:03:31] [Server thread/INFO] [minecraft/MinecraftServer]: [Not Secure] <AI_Bot_01> Coming to you, Seia_Y!
+[19:03:55] [Server thread/WARN] [minecraft/ServerGamePacketListenerImpl]: AI_Bot_01 was kicked for floating too long!
+[19:03:55] [Server thread/INFO] [minecraft/ServerGamePacketListenerImpl]: AI_Bot_01 lost connection: Flying is not enabled on this server
+[19:03:55] [Server thread/INFO] [minecraft/MinecraftServer]: AI_Bot_01 left the game
+[19:04:00] [Netty Server IO #17/ERROR] [ne.mi.ne.HandshakeHandler/FMLHANDSHAKE]: Recieved unexpected index 0 in client reply
+[19:04:02] [Server thread/INFO] [minecraft/PlayerList]: AI_Bot_01[/[::1]:64496] logged in with entity id 66376 at (20.3, 69.0, -3.5)
+[19:04:02] [Server thread/INFO] [ModernFix/]: Using enhanced recipe sync for player AI_Bot_01
+[19:04:02] [Server thread/INFO] [minecraft/MinecraftServer]: AI_Bot_01 joined the game
+[19:04:03] [Server thread/INFO] [minecraft/ServerGamePacketListenerImpl]: AI_Bot_01 lost connection: Disconnected
+[19:04:03] [Server thread/INFO] [minecraft/MinecraftServer]: AI_Bot_01 left the game

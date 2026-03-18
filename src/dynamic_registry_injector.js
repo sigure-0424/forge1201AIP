@@ -6,104 +6,90 @@ class DynamicRegistryInjector {
     }
 
     readVarInt(buffer, offset) {
-        let numRead = 0;
-        let result = 0;
-        let read;
+        let numRead = 0, result = 0, read;
         do {
             if (offset + numRead >= buffer.length) throw new Error('Buffer overflow');
             read = buffer.readUInt8(offset + numRead);
-            let value = (read & 0b01111111);
-            result |= (value << (7 * numRead));
-            numRead++;
-        } while ((read & 0b10000000) != 0);
+            result |= ((read & 0x7F) << (7 * numRead++));
+        } while ((read & 0x80) !== 0);
         return { value: result, bytesRead: numRead };
     }
 
     parseRegistryPayload(payloadBuffers) {
-        console.log(`[DynamicRegistry] Parsing ${payloadBuffers.length} registry payload buffers...`);
+        console.log(`[DynamicRegistry] Scanning ${payloadBuffers.length} buffers...`);
         const parsedEntries = [];
-        
         for (const buf of payloadBuffers) {
-            try {
-                const str = buf.toString('utf8');
-                // Highly lenient regex to find ResourceLocations in binary/NBT data
-                const matches = str.match(/[a-z0-9_.-]+:[a-z0-9_.-]+/g);
+            let offset = 0;
+            while (offset < buf.length) {
+                const colonIndex = buf.indexOf(0x3A, offset); // ':'
+                if (colonIndex === -1) break;
+                let start = colonIndex - 1;
+                while (start >= 0 && /[a-z0-9_.-]/.test(String.fromCharCode(buf[start]))) start--;
+                start++;
+                let end = colonIndex + 1;
+                while (end < buf.length && /[a-z0-9_/.-]/.test(String.fromCharCode(buf[end]))) end++;
                 
-                if (matches) {
-                    for (const match of matches) {
-                        const matchBuf = Buffer.from(match, 'utf8');
-                        const matchIndex = buf.indexOf(matchBuf);
-                        if (matchIndex === -1) continue;
-                        
-                        let offset = matchIndex + matchBuf.length;
-                        let entryId;
-                        
-                        // Try to extract the REAL ID if it follows the name in the binary stream
-                        try {
-                            const { value, bytesRead } = this.readVarInt(buf, offset);
-                            if (value >= 0 && value < 1000000) {
-                                entryId = value;
-                            }
-                        } catch (e) {}
-                        
-                        // Fallback to synthetic ID if extraction fails
-                        if (entryId === undefined) {
-                            entryId = 20000 + parsedEntries.length;
-                        }
-                        
-                        if (!parsedEntries.find(e => e.name === match)) {
-                            const type = match.includes('block') || match.includes('ore') ? 'block' : 'item';
-                            parsedEntries.push({ id: entryId, name: match, type });
-                        }
+                const name = buf.toString('utf8', start, end);
+                if (name.includes(':')) {
+                    let entryId = undefined;
+                    try {
+                        const { value } = this.readVarInt(buf, end);
+                        if (value >= 0 && value < 32767) entryId = value;
+                    } catch (e) {}
+                    
+                    if (entryId === undefined) entryId = 30000 + parsedEntries.length;
+                    
+                    if (!parsedEntries.find(e => e.name === name)) {
+                        const lower = name.toLowerCase();
+                        const isBlock = lower.includes('block') || lower.includes('stone') || lower.includes('ore') || 
+                                        lower.includes('dirt') || lower.includes('grass') || lower.includes('planks') ||
+                                        lower.includes('log') || lower.includes('plate') || lower.includes('base');
+                        parsedEntries.push({ id: entryId, name, type: isBlock ? 'block' : 'item' });
                     }
                 }
-            } catch (e) {
-                console.warn(`[DynamicRegistry] Failed to parse a registry buffer: ${e.message}`);
+                offset = end;
             }
         }
-        
-        console.log(`[DynamicRegistry] Discovered ${parsedEntries.length} entries via lenient heuristic.`);
         return parsedEntries;
     }
 
     injectBlockToRegistry(parsedEntries) {
-        console.log(`[DynamicRegistry] Injecting ${parsedEntries.length} entries into bot registry.`);
+        console.log(`[DynamicRegistry] Injecting ${parsedEntries.length} entries...`);
+        
+        // Use Stone as a template for all modded blocks to ensure valid properties
+        const template = this.registry.blocksByName['stone'] || {
+            hardness: 1.5, resistance: 6, material: 'rock', boundingBox: 'block'
+        };
 
         for (const entry of parsedEntries) {
             if (entry.type === 'block') {
                 if (this.registry.blocksByName[entry.name]) continue;
 
                 const blockData = {
+                    ...template,
                     id: entry.id,
                     name: entry.name,
                     displayName: entry.name,
-                    hardness: 1.0,
-                    diggable: true,
-                    boundingBox: 'block',
-                    transparent: false,
-                    material: 'rock',
-                    harvestTools: {},
-                    states: []
+                    states: [],
+                    minStateId: entry.id,
+                    maxStateId: entry.id,
+                    defaultState: entry.id
                 };
+
+                // DIRECT INJECTION - NO PROXIES
                 this.registry.blocks[entry.id] = blockData;
                 this.registry.blocksByName[entry.name] = blockData;
-                if (this.registry.blocksArray && !this.registry.blocksArray.includes(blockData)) {
-                    this.registry.blocksArray.push(blockData);
+                if (this.registry.blocksByStateId) this.registry.blocksByStateId[entry.id] = blockData;
+                if (this.registry.blocksArray) this.registry.blocksArray.push(blockData);
+                if (this.registry.blockCollisionShapes) {
+                    this.registry.blockCollisionShapes.blocks[entry.name] = 1; // Solid
                 }
-            } else if (entry.type === 'item') {
+            } else {
                 if (this.registry.itemsByName[entry.name]) continue;
-
-                const itemData = {
-                    id: entry.id,
-                    name: entry.name,
-                    displayName: entry.name,
-                    stackSize: 64
-                };
+                const itemData = { id: entry.id, name: entry.name, displayName: entry.name, stackSize: 64 };
                 this.registry.items[entry.id] = itemData;
                 this.registry.itemsByName[entry.name] = itemData;
-                if (this.registry.itemsArray && !this.registry.itemsArray.includes(itemData)) {
-                    this.registry.itemsArray.push(itemData);
-                }
+                if (this.registry.itemsArray) this.registry.itemsArray.push(itemData);
             }
         }
         console.log('[DynamicRegistry] Injection complete.');
