@@ -17,7 +17,8 @@ class MockBot extends EventEmitter {
         this.inventory = new EventEmitter();
         this.pathfinder = {
             movements: {
-                getCost: (node, move) => 1
+                getCost: (node, move) => 1,
+                getBlockInfo: (block) => ({ safe: true, physical: true, height: 1 })
             }
         };
     }
@@ -92,8 +93,16 @@ async function testCreateContraptionHazard() {
     assert.strictEqual(costOutside, 1);
     
     // Test point inside
-    const costInside = movements.getCost({}, { x: 15, y: 65, z: 15 });
-    assert.strictEqual(costInside, Infinity);
+    // In this codebase, the override actually overrides getBlockInfo, not getCost directly
+    // Let's adapt the test to verify getBlockInfo instead.
+    const blockOutside = { position: { x: 5, y: 64, z: 5 } };
+    const infoOutside = movements.getBlockInfo(blockOutside);
+    assert.strictEqual(infoOutside.safe, true);
+
+    const blockInside = { position: { x: 15, y: 65, z: 15 } };
+    const infoInside = movements.getBlockInfo(blockInside);
+    assert.strictEqual(infoInside.safe, false);
+    assert.strictEqual(infoInside.physical, false);
     
     console.log('[OK] CreateContraptionHazard verified.');
 }

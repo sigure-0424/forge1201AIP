@@ -53,14 +53,15 @@ class DynamicRegistryInjector {
     }
 
     injectBlockToRegistry(parsedEntries) {
-        console.log(`[DynamicRegistry] Vanilla-First Mode: Mapping existing vanilla blocks only.`);
+        console.log(`[DynamicRegistry] Mod-Compatible Mode: Mapping vanilla blocks and injecting dummy mod blocks.`);
         let mappedCount = 0;
+        let dummyCount = 0;
 
         for (const entry of parsedEntries) {
+            // Remove the namespace (e.g., minecraft:) to get the pure block/item name
+            const shortName = entry.name.replace(/^[^:]+:/, '');
+
             if (entry.type === 'block') {
-                // Remove the namespace (e.g., minecraft:) to get the pure block name
-                const shortName = entry.name.replace(/^[^:]+:/, '');
-                
                 // Retrieve the vanilla block definition already held by Mineflayer
                 const vanillaBlock = this.registry.blocksByName[shortName];
 
@@ -72,10 +73,48 @@ class DynamicRegistryInjector {
                         this.registry.blocksByStateId[entry.id] = vanillaBlock;
                     }
                     mappedCount++;
+                } else {
+                    // Mod block - inject dummy block definition
+                    const dummyBlock = {
+                        id: entry.id,
+                        name: entry.name,
+                        displayName: shortName,
+                        hardness: 1.0,
+                        resistance: 1.0,
+                        diggable: true,
+                        boundingBox: "block",
+                        transparent: false,
+                        emitLight: 0,
+                        filterLight: 0,
+                        defaultState: entry.id,
+                        minStateId: entry.id,
+                        maxStateId: entry.id,
+                        states: [],
+                        drops: [],
+                        material: "rock",
+                        harvestTools: {}
+                    };
+
+                    this.registry.blocks[entry.id] = dummyBlock;
+                    if (this.registry.blocksByStateId) {
+                        this.registry.blocksByStateId[entry.id] = dummyBlock;
+                    }
+                    dummyCount++;
                 }
+            } else if (entry.type === 'item') {
+                // Inject dummy item definitions for tests and possible inventory compatibility
+                const dummyItem = {
+                    id: entry.id,
+                    name: entry.name,
+                    displayName: shortName,
+                    stackSize: 64
+                };
+                if (!this.registry.items) this.registry.items = {};
+                this.registry.items[entry.id] = dummyItem;
+                dummyCount++;
             }
         }
-        console.log(`[DynamicRegistry] Mapped ${mappedCount} vanilla blocks. Ignored MOD blocks.`);
+        console.log(`[DynamicRegistry] Mapped ${mappedCount} vanilla blocks. Injected ${dummyCount} dummy MOD blocks.`);
     }
 }
 
