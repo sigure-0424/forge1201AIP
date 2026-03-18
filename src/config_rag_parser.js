@@ -56,6 +56,13 @@ class ConfigRAGParser {
             context += `- VeinMiner: Max Blocks per vein = ${this.constraints.veinMiner.maxBlocks}, Cooldown = ${this.constraints.veinMiner.cooldownTicks} ticks\n`;
         }
 
+        context += "\n=== AI INSTRUCTION FORMAT ===\n";
+        context += "Output commands strictly in JSON format to be executed by the bot. Supported formats:\n";
+        context += "- Follow a player: `{\"action\": \"come\", \"target\": \"player_name\"}`\n";
+        context += "- Break a block: `{\"action\": \"break\", \"target\": \"x,y,z\"}`\n";
+        context += "- Stop current task: `{\"action\": \"stop\"}`\n";
+        context += "- Get status: `{\"action\": \"status\"}`\n";
+
         return context;
     }
 }
