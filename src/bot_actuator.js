@@ -76,9 +76,11 @@ bot.on('spawn', async () => {
     movements.maxDropDown = 4;
 
     bot.pathfinder.setMovements(movements);
-    // Raised from 5000 — dense forests/complex terrain near y=72 still hit 5s limit
-    bot.pathfinder.thinkTimeout = 10000;
-    bot.pathfinder.tickTimeout = 10;
+    // thinkTimeout: max ms A* may search before giving up on a path.
+    // 5 000 ms caps peak heap at ~300 MB per failed attempt (10 000 ms OOM'd at ~600 MB).
+    bot.pathfinder.thinkTimeout = 5000;
+    // tickTimeout: ms of A* work per game tick. Smaller → more GC opportunities.
+    bot.pathfinder.tickTimeout = 5;
 
     console.log('[Actuator] Pathfinder and Physics initialized.');
     bot.chat('Forge AI Player Ready.');
@@ -487,7 +489,12 @@ async function processActionQueue() {
                                 bot.pathfinder.setGoal(null);
                                 const targetBlock = bot.blockAt(blockPos);
                                 await equipBestTool(targetBlock);
-                                await withTimeout(bot.collectBlock.collect(targetBlock), timeoutMs, `collect ${action.target}`, () => {
+                                // Cap per-block timeout at 20 s regardless of action.timeout.
+                                // The action timeout (e.g. 120 s) covers the whole batch;
+                                // one unreachable block must not monopolise the pathfinder
+                                // long enough to OOM (~600 MB per 10 s think cycle).
+                                const perBlockMs = Math.min(timeoutMs, 20000);
+                                await withTimeout(bot.collectBlock.collect(targetBlock), perBlockMs, `collect ${action.target}`, () => {
                                     bot.pathfinder.setGoal(null);
                                     if (bot.collectBlock.cancelTask) bot.collectBlock.cancelTask();
                                 });
