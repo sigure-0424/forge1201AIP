@@ -99,8 +99,21 @@ function getEnvironmentContext() {
 }
 
 // Eye (Perception)
+// Forge 1.20.1 servers can deliver the same player chat message twice
+// (once as player_chat, once as system_chat formatted by a plugin).
+// Deduplicate within a 1-second window to avoid double-processing.
+const _chatDedup = new Map(); // 'username:message' → timestamp
 bot.on('chat', (username, message) => {
     if (username === bot.username) return;
+    const key = `${username}:${message}`;
+    const now = Date.now();
+    if (now - (_chatDedup.get(key) ?? 0) < 1000) return;
+    _chatDedup.set(key, now);
+    // Prune stale entries so the map doesn't grow unbounded
+    if (_chatDedup.size > 64) {
+        const cutoff = now - 5000;
+        for (const [k, t] of _chatDedup) if (t < cutoff) _chatDedup.delete(k);
+    }
     process.send({ type: 'USER_CHAT', data: { username, message, environment: getEnvironmentContext() } });
 });
 
