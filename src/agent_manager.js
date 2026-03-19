@@ -52,10 +52,34 @@ class AgentManager {
         }
     }
 
-    async processChatWithLLM(botId, data) {
+    sanitizeLLMAction(action) {
+        if (Array.isArray(action)) {
+            return action;
+        }
+        if (action && typeof action === 'object') {
+            if (action.actions && Array.isArray(action.actions)) {
+                return action.actions;
+            }
+            if (action.action) {
+                return [action];
+            }
+            const keys = Object.keys(action);
+            for (const key of keys) {
+                if (action[key] && action[key].action) {
+                    return [action[key]];
+                }
+                if (Array.isArray(action[key])) {
+                    return action[key];
+                }
+            }
+        }
+        return null;
+    }
+
+    async processChatWithLLM(botId, data, retryCount = 0) {
         console.log(`[AgentManager] Thinking about what ${data.username} said: "${data.message}"...`);
 
-        const prompt = `You are a Minecraft AI bot named ${botId}.
+        let prompt = `You are a Minecraft AI bot named ${botId}.
 User '${data.username}' said: "${data.message}"
 Current Environment: ${JSON.stringify(data.environment)}
 
@@ -72,16 +96,28 @@ Supported actions:
 [{"action": "give", "target": "player_name", "item": "oak_log", "quantity": 64}]
 `;
 
+        if (retryCount > 0) {
+            prompt += `\n\nYour previous response was incorrectly formatted. Please ensure you respond ONLY with a valid JSON array containing action objects.`;
+        }
+
         let action = await this.llm.generateAction(prompt);
         console.log(`[AgentManager] LLM decided action:`, action);
 
-        if (!Array.isArray(action)) {
-            action = [action];
+        let sanitizedActions = this.sanitizeLLMAction(action);
+
+        if (!sanitizedActions || sanitizedActions.length === 0) {
+            if (retryCount < 2) {
+                console.log(`[AgentManager] Invalid JSON format received from LLM. Retrying (${retryCount + 1}/2)...`);
+                return this.processChatWithLLM(botId, data, retryCount + 1);
+            } else {
+                console.log(`[AgentManager] Failed to get valid JSON from LLM after retries.`);
+                sanitizedActions = [{"action": "chat", "message": "I could not understand that or my brain failed to format the response."}];
+            }
         }
 
         const botProcess = this.bots.get(botId);
         if (botProcess) {
-            botProcess.send({ type: 'EXECUTE_ACTION', action });
+            botProcess.send({ type: 'EXECUTE_ACTION', action: sanitizedActions });
         }
     }
 

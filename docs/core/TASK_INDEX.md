@@ -3,6 +3,7 @@
 ## Active
 
 ## Completed
+- BUGFIX-20260319-002-fix-llm-json-parsing: Fixed bot freeze by adding JSON sanitization/retry in AgentManager and action task queue in bot_actuator.js
 - BUGFIX-20260319-001-missing-collectblock: Installed missing 'mineflayer-collectblock' to resolve crash on launch
 - TASK-20260319-001-finalize-npm-scripts: Finalize package.json npm scripts to run test suite
 - BUGFIX-20260318-002-fix-modded-block-interaction: Fix modded block interaction issues

@@ -4,6 +4,7 @@ project_short_name: "Forge1201AIP"
 current_goal: "Implement autonomous AI player framework using Mineflayer for Minecraft 1.20.1 Forge environment, including FML3 handshakes and dynamic registry handling."
 active_tasks: []
 recent_changes:
+  - "2026-03-19: Fixed LLM JSON parsing (added AgentManager sanitization and Actuator task queue) (BUGFIX-20260319-002-fix-llm-json-parsing)"
   - "2026-03-19: Fixed missing 'mineflayer-collectblock' module causing startup crash (BUGFIX-20260319-001-missing-collectblock)"
   - "2026-03-19: Finalized npm scripts to hook up the test suite (TASK-20260319-001-finalize-npm-scripts)"
   - "2026-03-18: Successfully resolved 'floating' freeze and positional desync via Vanilla-exclusive mapping mode (BUGFIX-20260318-005)"
