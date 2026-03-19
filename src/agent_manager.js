@@ -157,13 +157,14 @@ Decide your next action based on the user's command and your environment.
 *CRITICAL*: You MUST prioritize taking action over conversation. Only use the 'chat' action to report unrecoverable errors or answer direct questions.
 *CRITICAL*: You will receive follow-up 'System' messages letting you know if an action succeeded or failed. If you fail to collect a block, consider crafting a proper tool first (e.g. a wooden_shovel for dirt).
 *CRITICAL*: Always check your inventory. If you are asked to collect dirt, craft a shovel first. If you don't have wood for a shovel, collect wood first. Use the 'craft' action to make items. If you need a crafting table, craft one, 'place' it, and then craft your desired tool.
+*CRITICAL*: The bot will automatically attempt to craft a required tool before mining if none is found — do NOT loop on tool-crafting if you already issued a collect command.
 Respond ONLY with a valid JSON array containing one or more action objects.
 If the user provides only two numbers for coordinates, assign them to X and Z respectively, and omit Y.
 You may add a 'timeout' parameter (in seconds) to any action (default is 30s).
 Supported actions:
 [{"action": "chat", "message": "text"}]
-[{"action": "come", "target": "player_name"}]
-[{"action": "goto", "x": 10, "z": 20, "timeout": 60}]
+[{"action": "come", "target": "player_name"}]  -- continuously follows the player until stopped; send [{"action":"stop"}] to halt
+[{"action": "goto", "x": 10, "z": 20, "timeout": 60}]  -- supports any distance; uses waypoints automatically
 [{"action": "goto", "x": 10, "y": 64, "z": 20}]
 [{"action": "stop"}]
 [{"action": "collect", "target": "oak_log", "quantity": 64, "timeout": 120}]
