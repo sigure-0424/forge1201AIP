@@ -3,6 +3,9 @@
 ## Active
 
 ## Completed
+- TASK-20260320-001-documentation-sync: Sync docs for boss-defeat actions, LLM multi-format parser, and GOAL.md key removal
+- BUGFIX-20260320-001-llm-multi-format-parser: Multi-format extractText() + better connection error diagnostics in LLM client
+- TASK-20260319-004: Collect reliability fixes + 11 boss-defeat actions (eat, smelt, kill, equip_armor, sleep, brew, enchant, explore, navigate_portal, activate_end_portal, place_pattern)
 - TASK-20260319-005-configure-llm-env: Configure dotenv, model defaults, and API key auth for LLM Client
 - TASK-20260319-003-pathfinding-and-collection-fixes: 6 fixes — GoalFollow come, relaxed thinkTimeout, waypoint goto, collect skip-on-fail, silent stop, auto-tool subroutine
 - TASK-20260319-002-consolidate-tests-and-fix-line-endings: Consolidated npm test to run all 6 test files; added .gitattributes for LF enforcement
