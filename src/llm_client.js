@@ -55,7 +55,7 @@ class LLMClient {
 
             if (data.error) {
                 console.error(`[LLMClient] API error: ${data.error}`);
-                return { action: "chat", message: `LLM API Error: ${data.error}` };
+                return null;
             }
 
             const rawText = LLMClient.extractText(data);
@@ -71,7 +71,7 @@ class LLMClient {
 
         } catch (err) {
             console.error("[LLMClient] Failed to generate action:", err.message);
-            return { action: "chat", message: "Failed to interpret AI reasoning results." };
+            return null;
         }
     }
 }

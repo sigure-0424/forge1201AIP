@@ -205,6 +205,12 @@ ELDER GUARDIAN: brew(water_breathing) + brew(night_vision) → explore for ocean
 
         let action = await this.llm.generateAction(prompt);
 
+        // LLM unreachable or returned an API error — stay silent, do not send anything to the bot.
+        if (action === null) {
+            this.activeLlmRequests.delete(botId);
+            return;
+        }
+
         // Check again after await
         if (this.activeLlmRequests.get(botId) !== thoughtId) {
             console.log(`[AgentManager] Thought ${thoughtId} for ${botId} was superseded after LLM response. Aborting.`);
