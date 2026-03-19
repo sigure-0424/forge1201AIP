@@ -78,59 +78,171 @@ bot.on('spawn', () => {
     bot.chat('Forge AI Player Ready.');
 });
 
-async function handleCommand(username, payload) {
+function getEnvironmentContext() {
+    const pos = bot.entity.position;
+    const health = bot.health;
+    const food = bot.food;
+    const onGround = bot.entity.onGround;
+
+    const inventory = bot.inventory.items().map(item => ({
+        name: item.name,
+        count: item.count
+    }));
+
+    const heldItem = bot.inventory.slots[bot.getEquipmentDestSlot('hand')];
+    const heldItemName = heldItem ? heldItem.name : 'none';
+
+    // Scan for nearby entities
+    const nearbyEntities = [];
+    for (const id in bot.entities) {
+        const entity = bot.entities[id];
+        if (entity === bot.entity) continue;
+        const distance = pos.distanceTo(entity.position);
+        if (distance < 16) {
+            nearbyEntities.push({
+                type: entity.type,
+                name: entity.username || entity.name,
+                distance: distance.toFixed(1),
+                position: { x: entity.position.x.toFixed(1), y: entity.position.y.toFixed(1), z: entity.position.z.toFixed(1) }
+            });
+        }
+    }
+
+    // Quick scan for interesting blocks nearby (simplified to avoid freezing)
+    const interestingBlocks = [];
+    const blockIdsToFind = [
+        bot.registry.blocksByName['oak_log']?.id,
+        bot.registry.blocksByName['diamond_ore']?.id,
+        bot.registry.blocksByName['iron_ore']?.id
+    ].filter(id => id !== undefined);
+
+    if (blockIdsToFind.length > 0) {
+        const blocks = bot.findBlocks({ matching: blockIdsToFind, maxDistance: 16, count: 5 });
+        for (const p of blocks) {
+            const block = bot.blockAt(p);
+            if (block) {
+                interestingBlocks.push({
+                    name: block.name,
+                    position: { x: p.x, y: p.y, z: p.z },
+                    distance: pos.distanceTo(p).toFixed(1)
+                });
+            }
+        }
+    }
+
+    return {
+        status: {
+            position: { x: pos.x.toFixed(1), y: pos.y.toFixed(1), z: pos.z.toFixed(1) },
+            health,
+            food,
+            onGround
+        },
+        inventory,
+        heldItem: heldItemName,
+        nearbyEntities,
+        nearbyInterestingBlocks: interestingBlocks
+    };
+}
+
+class LLMController {
+    constructor(apiUrl = 'http://localhost:11434/api/generate', model = 'llama3') {
+        this.apiUrl = apiUrl;
+        this.model = model;
+    }
+
+    async askLLM(context, goal) {
+        const prompt = `
+You are a Minecraft AI player. Your goal is: "${goal}"
+
+Current Environment:
+${JSON.stringify(context, null, 2)}
+
+Based on the environment and goal, choose one action to execute.
+Output STRICTLY a valid JSON object matching one of these formats, and nothing else:
+- {"action": "come", "target": "player_name"}
+- {"action": "stop"}
+- {"action": "status"}
+- {"action": "goto", "x": number, "y": number, "z": number}
+- {"action": "search", "target": "block_name"}
+- {"action": "collect", "target": "block_name", "quantity": number}
+- {"action": "give", "target": "player_name", "item": "item_name", "quantity": number}
+- {"action": "done", "reason": "Goal achieved"}
+`;
+
+        try {
+            const response = await fetch(this.apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: this.model,
+                    prompt: prompt,
+                    stream: false,
+                    format: 'json'
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`LLM API returned status ${response.status}`);
+            }
+
+            const data = await response.json();
+            return JSON.parse(data.response);
+        } catch (error) {
+            console.error(`[LLM] Error asking LLM: ${error.message}`);
+            return { action: 'stop' }; // Safe fallback
+        }
+    }
+}
+
+async function executeAction(payload) {
     const action = payload.action;
     try {
         if (action === 'come') {
-            const targetName = payload.target || username;
+            const targetName = payload.target;
             const player = bot.players[targetName];
             if (!player || !player.entity) {
-                bot.chat('I cannot see you!');
-                return;
+                return `Cannot see player ${targetName}`;
             }
-            bot.chat(`Coming to you, ${targetName}!`);
             bot.pathfinder.setGoal(new goals.GoalFollow(player.entity, 1), true);
+            return `Following ${targetName}`;
         } else if (action === 'status') {
             const pos = bot.entity.position;
             const block = bot.blockAt(pos.offset(0, -0.5, 0));
-            bot.chat(`Pos: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)} | Ground: ${bot.entity.onGround} | Block: ${block ? block.name : '?'}`);
+            return `Pos: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)} | Ground: ${bot.entity.onGround} | Block: ${block ? block.name : '?'}`;
         } else if (action === 'stop') {
             bot.pathfinder.setGoal(null);
-            bot.chat('Stopped.');
+            return 'Stopped current action.';
         } else if (action === 'goto') {
             const { x, y, z } = payload;
             if (x === undefined || y === undefined || z === undefined) {
-                bot.chat('Missing coordinates for goto.');
-                return;
+                return 'Missing coordinates for goto.';
             }
-            bot.chat(`Going to ${x}, ${y}, ${z}...`);
-            await bot.pathfinder.goto(new goals.GoalNear(x, y, z, 1));
-            bot.chat(`Arrived at ${x}, ${y}, ${z}.`);
+            try {
+                await bot.pathfinder.goto(new goals.GoalNear(x, y, z, 1));
+                return `Arrived at ${x}, ${y}, ${z}.`;
+            } catch (err) {
+                return `Failed to reach ${x}, ${y}, ${z}: ${err.message}`;
+            }
         } else if (action === 'search') {
             const targetBlockName = payload.target;
             const targetBlockData = bot.registry.blocksByName[targetBlockName];
             if (!targetBlockData) {
-                bot.chat(`I don't know what ${targetBlockName} is.`);
-                return;
+                return `Unknown block: ${targetBlockName}`;
             }
-            bot.chat(`Searching for ${targetBlockName}...`);
             const blocks = bot.findBlocks({ matching: targetBlockData.id, maxDistance: 32, count: 10 });
             if (blocks.length === 0) {
-                bot.chat(`Could not find any ${targetBlockName} nearby.`);
+                return `Could not find any ${targetBlockName} nearby.`;
             } else {
-                bot.chat(`Found ${blocks.length} ${targetBlockName}(s). Closest is at: ${blocks[0].x}, ${blocks[0].y}, ${blocks[0].z}`);
+                return `Found ${blocks.length} ${targetBlockName}(s). Closest is at: ${blocks[0].x}, ${blocks[0].y}, ${blocks[0].z}`;
             }
         } else if (action === 'collect') {
             const targetBlockName = payload.target;
             const targetBlockData = bot.registry.blocksByName[targetBlockName];
             if (!targetBlockData) {
-                bot.chat(`I don't know what ${targetBlockName} is.`);
-                return;
+                return `Unknown block: ${targetBlockName}`;
             }
             let quantity = payload.quantity || 1;
             const bounds = payload.bounds;
-
-            bot.chat(`Starting collection of ${quantity} ${targetBlockName}(s).`);
 
             let collected = 0;
             while (collected < quantity) {
@@ -146,8 +258,7 @@ async function handleCommand(username, payload) {
                 }
 
                 if (blocks.length === 0) {
-                    bot.chat(`No more ${targetBlockName} found in range.`);
-                    break;
+                    return `No more ${targetBlockName} found in range. Collected ${collected}/${quantity}.`;
                 }
 
                 const targetPos = blocks[0];
@@ -160,11 +271,10 @@ async function handleCommand(username, payload) {
                     }
                 } catch (digErr) {
                     console.error(`[Actuator] Collect step failed: ${digErr.message}`);
-                    bot.chat(`Failed to collect block at ${targetPos.x}, ${targetPos.y}, ${targetPos.z}`);
-                    break; // Prevent infinite loop on inaccessible block
+                    return `Failed to collect block at ${targetPos.x}, ${targetPos.y}, ${targetPos.z}: ${digErr.message}. Collected ${collected}/${quantity}.`;
                 }
             }
-            bot.chat(`Collection finished. Got ${collected}/${quantity} ${targetBlockName}(s).`);
+            return `Collection finished. Got ${collected}/${quantity} ${targetBlockName}(s).`;
         } else if (action === 'give') {
             const targetPlayerName = payload.target;
             const itemName = payload.item;
@@ -172,64 +282,113 @@ async function handleCommand(username, payload) {
 
             const targetPlayer = bot.players[targetPlayerName];
             if (!targetPlayer || !targetPlayer.entity) {
-                bot.chat(`I cannot see ${targetPlayerName} to give them items!`);
-                return;
+                return `I cannot see ${targetPlayerName} to give them items!`;
             }
 
             const itemData = bot.registry.itemsByName[itemName];
             if (!itemData) {
-                bot.chat(`I don't know what item ${itemName} is.`);
-                return;
+                return `I don't know what item ${itemName} is.`;
             }
-
-            bot.chat(`Going to ${targetPlayerName} to give ${quantity} ${itemName}(s).`);
 
             try {
                 await bot.pathfinder.goto(new goals.GoalNear(targetPlayer.entity.position.x, targetPlayer.entity.position.y, targetPlayer.entity.position.z, 2));
-                bot.chat(`Here is your ${itemName}.`);
                 await bot.toss(itemData.id, null, quantity);
+                return `Gave ${quantity} ${itemName}(s) to ${targetPlayerName}.`;
             } catch (err) {
                 console.error(`[Actuator] Give step failed: ${err.message}`);
-                bot.chat(`Failed to give item to ${targetPlayerName}.`);
+                return `Failed to give item to ${targetPlayerName}: ${err.message}`;
             }
         } else {
-            bot.chat(`Unknown action: ${action}`);
+            return `Unknown action: ${action}`;
         }
     } catch (e) {
         console.error(`[Actuator] Error handling command: ${e.message}`);
-        bot.chat(`Error executing action ${action}.`);
+        return `Error executing action ${action}: ${e.message}`;
     }
 }
 
-// Command Handler
-bot.on('chat', (username, message) => {
+const llmController = new LLMController();
+let isBusy = false;
+
+// Autonomous Agent Loop
+bot.on('chat', async (username, message) => {
     if (username === bot.username) return;
 
-    // Try parsing as JSON first (from AI)
-    const jsonMatch = message.match(/\{[\s\S]*?\}/);
-    if (jsonMatch) {
-        try {
-            const payload = JSON.parse(jsonMatch[0]);
-            handleCommand(username, payload);
+    // Check if the message is directed at the bot or if it's a direct command
+    if (!message.toLowerCase().startsWith('bot ') && !message.toLowerCase().startsWith('ai ')) {
+        // Fallback to basic commands for backwards compatibility in tests
+        const cmd = message.toLowerCase();
+        if (cmd === 'come' || cmd === 'status' || cmd === 'stop') {
+            const res = await executeAction({ action: cmd, target: username });
+            bot.chat(res);
             return;
-        } catch (e) {
-            console.error(`[Actuator] Failed to parse JSON payload: ${e.message}`);
         }
+
+        // Also support old JSON direct format
+        const jsonMatch = message.match(/\{[\s\S]*?\}/);
+        if (jsonMatch) {
+             try {
+                 const payload = JSON.parse(jsonMatch[0]);
+                 const res = await executeAction(payload);
+                 bot.chat(res);
+                 return;
+             } catch (e) {
+                 // ignore
+             }
+        }
+        return;
     }
 
-    // Fallback to basic text commands
-    const cmd = message.toLowerCase();
-    try {
-        if (cmd === 'come') {
-            handleCommand(username, { action: 'come' });
-        } else if (cmd === 'status') {
-            handleCommand(username, { action: 'status' });
-        } else if (cmd === 'stop') {
-            handleCommand(username, { action: 'stop' });
-        }
-    } catch (e) {
-        console.error(`[Actuator] Chat Command Error: ${e.message}`);
+    const goal = message.replace(/^bot |^ai /i, '').trim();
+
+    if (goal.toLowerCase() === 'stop') {
+        bot.pathfinder.setGoal(null);
+        isBusy = false;
+        bot.chat('Stopped current task.');
+        return;
     }
+
+    if (isBusy) {
+        bot.chat('I am currently busy. Please say "bot stop" to cancel the current task.');
+        return;
+    }
+
+    bot.chat(`Understood. My goal is: ${goal}`);
+    isBusy = true;
+    let loopCount = 0;
+    const maxLoops = 10;
+    let actionResult = 'Started task.';
+
+    while (isBusy && loopCount < maxLoops) {
+        loopCount++;
+        console.log(`[Agent Loop] Step ${loopCount}/${maxLoops} for goal: ${goal}`);
+
+        const context = getEnvironmentContext();
+        context.lastActionResult = actionResult;
+
+        const actionObj = await llmController.askLLM(context, goal);
+        console.log(`[Agent Loop] LLM decided action: ${JSON.stringify(actionObj)}`);
+
+        if (actionObj.action === 'stop' || actionObj.action === 'done') {
+            isBusy = false;
+            bot.chat(`Goal completed or stopped. Reason: ${actionObj.reason || 'None'}`);
+            break;
+        }
+
+        // Add implicit target if missing for 'come'
+        if (actionObj.action === 'come' && !actionObj.target) {
+            actionObj.target = username;
+        }
+
+        bot.chat(`Executing: ${actionObj.action}`);
+        actionResult = await executeAction(actionObj);
+        console.log(`[Agent Loop] Action result: ${actionResult}`);
+    }
+
+    if (loopCount >= maxLoops) {
+        bot.chat('I stopped because it was taking too many steps.');
+    }
+    isBusy = false;
 });
 
 // Global Error Handling
