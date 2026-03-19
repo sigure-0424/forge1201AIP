@@ -1,0 +1,8 @@
+# Enforce LF line endings for all text files
+* text=auto eol=lf
+
+# Force binary treatment for known binary types
+*.png binary
+*.jpg binary
+*.jar binary
+*.class binary

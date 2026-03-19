@@ -7,7 +7,8 @@
     "doc": "docs"
   },
   "scripts": {
-    "test": "node tests/test_e2e_integration.js"
+    "test": "node tests/test_fml3_handshake_logic_pure.js && node tests/test_dynamic_registry_injector.js && node tests/test_middlewares.js && node tests/test_config_rag_parser.js && node tests/test_agent_manager_recovery.js && node tests/test_e2e_integration.js",
+    "test:e2e": "node tests/test_e2e_integration.js"
   },
   "repository": {
     "type": "git",
