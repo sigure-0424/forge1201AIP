@@ -206,8 +206,12 @@ ELDER GUARDIAN: brew(water_breathing) + brew(night_vision) → explore for ocean
         let action = await this.llm.generateAction(prompt);
 
         // LLM unreachable or returned an API error — stay silent, do not send anything to the bot.
+        // Guard: only release the lock if this thought still owns it; a newer user message
+        // may have already overwritten the thoughtId while the request was in flight.
         if (action === null) {
-            this.activeLlmRequests.delete(botId);
+            if (this.activeLlmRequests.get(botId) === thoughtId) {
+                this.activeLlmRequests.delete(botId);
+            }
             return;
         }
 

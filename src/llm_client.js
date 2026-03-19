@@ -52,8 +52,9 @@ class LLMClient {
     async generateAction(prompt) {
         try {
             const headers = { 'Content-Type': 'application/json' };
-            if (process.env.OLLAMA_API_KEY) {
-                headers['Authorization'] = `Bearer ${process.env.OLLAMA_API_KEY}`;
+            const apiKey = (process.env.OLLAMA_API_KEY || '').trim();
+            if (apiKey) {
+                headers['Authorization'] = `Bearer ${apiKey}`;
             }
 
             let response;
@@ -74,6 +75,12 @@ class LLMClient {
 
             if (!response.ok) {
                 const body = await response.text().catch(() => '');
+                if (response.status === 401) {
+                    const hint = apiKey
+                        ? `Key sent (first 8 chars): "${apiKey.substring(0, 8)}...". Verify OLLAMA_API_KEY in .env matches the server's OLLAMA_API_KEY.`
+                        : `No key found — set OLLAMA_API_KEY in .env.`;
+                    throw new Error(`LLM HTTP 401 Unauthorized. ${hint}`);
+                }
                 throw new Error(`LLM HTTP ${response.status}: ${body.substring(0, 200)}`);
             }
 
