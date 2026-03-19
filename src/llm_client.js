@@ -29,13 +29,13 @@ class LLMClient {
             // debug :wat response
             console.log(`\n[LLMClient] --- LLM Response --- \n${rawText}\n[LLMClient] --- LLM Response END ---\n`);
 
-            // important: extract the JSON object from the response, which may contain additional text
-            const match = rawText.match(/\{[\s\S]*\}/);
+            // important: extract the JSON object or array from the response, which may contain additional text
+            const match = rawText.match(/(\{|\[)[\s\S]*(\}|\])/);
             
             if (match) {
                 return JSON.parse(match[0]);
             } else {
-                throw new Error("Response does not contain a valid JSON object.");
+                throw new Error("Response does not contain a valid JSON object or array.");
             }
 
         } catch (err) {
