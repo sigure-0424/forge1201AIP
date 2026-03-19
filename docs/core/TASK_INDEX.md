@@ -3,6 +3,7 @@
 ## Active
 
 ## Completed
+- TASK-20260319-005-configure-llm-env: Configure dotenv, model defaults, and API key auth for LLM Client
 - TASK-20260319-003-pathfinding-and-collection-fixes: 6 fixes — GoalFollow come, relaxed thinkTimeout, waypoint goto, collect skip-on-fail, silent stop, auto-tool subroutine
 - TASK-20260319-002-consolidate-tests-and-fix-line-endings: Consolidated npm test to run all 6 test files; added .gitattributes for LF enforcement
 - BUGFIX-20260319-004-fix-llm-race-condition: Fixed infinite LLM feedback loops and added command interruption and concurrency control

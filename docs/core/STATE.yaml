@@ -4,6 +4,7 @@ project_short_name: "Forge1201AIP"
 current_goal: "Implement autonomous AI player framework using Mineflayer for Minecraft 1.20.1 Forge environment, including FML3 handshakes and dynamic registry handling."
 active_tasks: []
 recent_changes:
+  - "2026-03-19: Configured LLM client to support dotenv, API keys, and gpt-oss:20b-cloud model default (TASK-20260319-005-configure-llm-env)"
   - "2026-03-19: Fixed come/goto/collect/stop/auto-tool logic (6 fixes) in bot_actuator.js and agent_manager.js (TASK-20260319-003-pathfinding-and-collection-fixes)"
   - "2026-03-19: Consolidated test suite to run all 6 test files via npm test, added .gitattributes for LF enforcement (TASK-20260319-002-consolidate-tests-and-fix-line-endings)"
   - "2026-03-19: Fixed AgentManager LLM race condition, infinite system feedback loops, and added interrupt control (BUGFIX-20260319-004-fix-llm-race-condition)"
