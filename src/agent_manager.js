@@ -8,6 +8,7 @@ class AgentManager {
         this.bots = new Map(); // Map of botId to ChildProcess
         this.restartingBots = new Set();
         this.llm = new LLMClient(process.env.OLLAMA_MODEL || 'llama3');
+        this.activeLlmRequests = new Map(); // Concurrency control
     }
 
     startBot(botId, options) {
@@ -29,6 +30,7 @@ class AgentManager {
         botProcess.on('exit', (code, signal) => {
             console.log(`[AgentManager] Bot process ${botId} exited with code ${code} and signal ${signal}`);
             this.bots.delete(botId);
+            this.activeLlmRequests.delete(botId);
             this.handleProcessCrash(botId, code);
         });
 
@@ -48,7 +50,41 @@ class AgentManager {
         } else if (message.type === 'LOG') {
             console.log(`[Bot ${botId}] ${message.data}`);
         } else if (message.type === 'USER_CHAT') {
-            this.processChatWithLLM(botId, message.data);
+            const data = message.data;
+            const isSystem = data.username === 'System';
+
+            // 1. Priority interruption: If user speaks, abort any current LLM requests and cancel any bot actions.
+            if (!isSystem) {
+                if (this.activeLlmRequests.has(botId)) {
+                    console.log(`[AgentManager] User command overrides existing thought process for ${botId}.`);
+                    // Note: fetch cancellation could be implemented here via AbortController, but logic-wise we just ignore it.
+                }
+                const botProcess = this.bots.get(botId);
+                if (botProcess) {
+                    botProcess.send({ type: 'EXECUTE_ACTION', action: [{ action: "stop" }] }); // Immediately halt current action queue
+                }
+                // Generate new thought ID to invalidate older ones
+                const thoughtId = Date.now();
+                this.activeLlmRequests.set(botId, thoughtId);
+                this.processChatWithLLM(botId, data, 0, thoughtId);
+            } else {
+                // 2. State Management: Only respond to system events if it implies a failure that needs a workaround or if the user explicitly asked for continuous reporting.
+                // For now, if the action was successful, transition to 'Idle' (do not ask LLM).
+                if (data.message.includes("Successfully")) {
+                    console.log(`[AgentManager] Task completed for ${botId}: ${data.message}. Entering Idle state.`);
+                    // Do not prompt LLM. Just wait for the next user command.
+                    return; 
+                } else if (data.message.includes("Failed") || data.message.includes("Cannot")) {
+                    // It's a failure. Allow LLM to reconsider, but only if we aren't already thinking about something else.
+                    if (!this.activeLlmRequests.has(botId)) {
+                        const thoughtId = Date.now();
+                        this.activeLlmRequests.set(botId, thoughtId);
+                        this.processChatWithLLM(botId, data, 0, thoughtId);
+                    } else {
+                        console.log(`[AgentManager] Ignoring system failure for ${botId} because another thought is active.`);
+                    }
+                }
+            }
         }
     }
 
@@ -104,7 +140,13 @@ class AgentManager {
         return null;
     }
 
-    async processChatWithLLM(botId, data, retryCount = 0) {
+    async processChatWithLLM(botId, data, retryCount = 0, thoughtId) {
+        // If a new thought has replaced this one, abort.
+        if (this.activeLlmRequests.get(botId) !== thoughtId) {
+            console.log(`[AgentManager] Thought ${thoughtId} for ${botId} was superseded. Aborting.`);
+            return;
+        }
+
         console.log(`[AgentManager] Thinking about what ${data.username} said: "${data.message}"...`);
 
         let prompt = `You are a Minecraft AI bot named ${botId}.
@@ -133,6 +175,13 @@ Supported actions:
         }
 
         let action = await this.llm.generateAction(prompt);
+
+        // Check again after await
+        if (this.activeLlmRequests.get(botId) !== thoughtId) {
+            console.log(`[AgentManager] Thought ${thoughtId} for ${botId} was superseded after LLM response. Aborting.`);
+            return;
+        }
+
         console.log(`[AgentManager] LLM decided action:`, action);
 
         let sanitizedActions = this.sanitizeLLMAction(action);
@@ -140,16 +189,23 @@ Supported actions:
         if (!sanitizedActions || sanitizedActions.length === 0) {
             if (retryCount < 2) {
                 console.log(`[AgentManager] Invalid JSON format received from LLM. Retrying (${retryCount + 1}/2)...`);
-                return this.processChatWithLLM(botId, data, retryCount + 1);
+                return this.processChatWithLLM(botId, data, retryCount + 1, thoughtId);
             } else {
                 console.log(`[AgentManager] Failed to get valid JSON from LLM after retries.`);
                 sanitizedActions = [{"action": "chat", "message": "I could not understand that or my brain failed to format the response."}];
             }
         }
 
+        // Action determined. Clear active request lock.
+        this.activeLlmRequests.delete(botId);
+
         const botProcess = this.bots.get(botId);
         if (botProcess) {
-            botProcess.send({ type: 'EXECUTE_ACTION', action: sanitizedActions });
+            // Remove the 'stop' action we might have injected if the LLM also happens to send one
+            const filteredActions = sanitizedActions.filter(a => a.action !== "stop");
+            if (filteredActions.length > 0) {
+                 botProcess.send({ type: 'EXECUTE_ACTION', action: filteredActions });
+            }
         }
     }
 

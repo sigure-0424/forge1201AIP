@@ -3,6 +3,7 @@
 ## Active
 
 ## Completed
+- BUGFIX-20260319-004-fix-llm-race-condition: Fixed infinite LLM feedback loops and added command interruption and concurrency control
 - BUGFIX-20260319-003-fix-oom-during-pathfinding: Fixed A* pathfinding Memory leak and JSON unwrapping
 - BUGFIX-20260319-002-fix-llm-json-parsing: Fixed bot freeze by adding JSON sanitization/retry in AgentManager and action task queue in bot_actuator.js
 - BUGFIX-20260319-001-missing-collectblock: Installed missing 'mineflayer-collectblock' to resolve crash on launch
