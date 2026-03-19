@@ -1,0 +1,91 @@
+--- Minecraft Forge 1.20.1 AI Player System ---
+[ConfigRAG] Parsing create-common.toml...
+[ConfigRAG] Parsing veinminer-common.toml...
+=== SERVER CONSTRAINTS ===
+- Create Mod: Max Stress = 4096, Base Speed = 16
+- VeinMiner: Max Blocks per vein = 128, Cooldown = 10 ticks
+
+=== AI INSTRUCTION FORMAT ===
+Output commands strictly in JSON format to be executed by the bot. Supported formats:
+- Follow a player: `{"action": "come", "target": "player_name"}`
+- Break a block: `{"action": "break", "target": "x,y,z"}`
+- Stop current task: `{"action": "stop"}`
+- Get status: `{"action": "status"}`
+
+Starting Agent Manager...
+Target Server: localhost:25565
+[AgentManager] Starting bot process for AI_Bot_01...
+[Actuator] Initializing AI_Bot_01...
+[Actuator] Protocol bypasses and NBT leniency applied.
+[Actuator] Connection allowed. Starting handshake machine...
+Error: connect ECONNREFUSED 127.0.0.1:25565
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 25565
+}
+[Actuator] Bot Error: connect ECONNREFUSED 127.0.0.1:25565
+[Actuator] Disconnected from server.
+[AgentManager] Received ERROR from bot AI_Bot_01: BotError - connect ECONNREFUSED 127.0.0.1:25565
+[AgentManager] Triggering recovery pipeline for AI_Bot_01, category: BotError
+[Recovery] General bot error. Attempting restart...
+[AgentManager] Bot process AI_Bot_01 exited with code null and signal SIGKILL
+[AgentManager] Restarting AI_Bot_01...
+[AgentManager] Starting bot process for AI_Bot_01...
+[Actuator] Initializing AI_Bot_01...
+[Actuator] Protocol bypasses and NBT leniency applied.
+[Actuator] Connection allowed. Starting handshake machine...
+Error: connect ECONNREFUSED 127.0.0.1:25565
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 25565
+}
+[Actuator] Bot Error: connect ECONNREFUSED 127.0.0.1:25565
+[Actuator] Disconnected from server.
+[AgentManager] Received ERROR from bot AI_Bot_01: BotError - connect ECONNREFUSED 127.0.0.1:25565
+[AgentManager] Triggering recovery pipeline for AI_Bot_01, category: BotError
+[Recovery] General bot error. Attempting restart...
+[AgentManager] Bot process AI_Bot_01 exited with code null and signal SIGKILL
+[AgentManager] Restarting AI_Bot_01...
+[AgentManager] Starting bot process for AI_Bot_01...
+[Actuator] Initializing AI_Bot_01...
+[Actuator] Protocol bypasses and NBT leniency applied.
+[Actuator] Connection allowed. Starting handshake machine...
+Error: connect ECONNREFUSED 127.0.0.1:25565
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 25565
+}
+[Actuator] Bot Error: connect ECONNREFUSED 127.0.0.1:25565
+[Actuator] Disconnected from server.
+[AgentManager] Received ERROR from bot AI_Bot_01: BotError - connect ECONNREFUSED 127.0.0.1:25565
+[AgentManager] Triggering recovery pipeline for AI_Bot_01, category: BotError
+[Recovery] General bot error. Attempting restart...
+[AgentManager] Bot process AI_Bot_01 exited with code null and signal SIGKILL
+[AgentManager] Restarting AI_Bot_01...
+[AgentManager] Starting bot process for AI_Bot_01...
+[Actuator] Initializing AI_Bot_01...
+[Actuator] Protocol bypasses and NBT leniency applied.
+[Actuator] Connection allowed. Starting handshake machine...
+Error: connect ECONNREFUSED 127.0.0.1:25565
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 25565
+}
+[Actuator] Bot Error: connect ECONNREFUSED 127.0.0.1:25565
+[Actuator] Disconnected from server.
+[AgentManager] Received ERROR from bot AI_Bot_01: BotError - connect ECONNREFUSED 127.0.0.1:25565
+[AgentManager] Triggering recovery pipeline for AI_Bot_01, category: BotError
+[Recovery] General bot error. Attempting restart...
+[AgentManager] Bot process AI_Bot_01 exited with code null and signal SIGKILL

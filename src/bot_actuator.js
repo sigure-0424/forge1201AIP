@@ -3,11 +3,7 @@ const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const ForgeHandshakeStateMachine = require('./forge_handshake_state_machine');
 const DynamicRegistryInjector = require('./dynamic_registry_injector');
-const EventDebouncer = require('./event_debouncer');
-const InventoryNBTPatch = require('./inventory_nbt_patch');
-const CreateContraptionHazard = require('./create_contraption_hazard');
 const nbt = require('prismarine-nbt');
-const Vec3 = require('vec3');
 
 // Robust Crash Protection
 process.on('uncaughtException', (err) => {
@@ -19,7 +15,7 @@ process.on('uncaughtException', (err) => {
 const botId = process.env.BOT_ID || 'Bot';
 const botOptions = process.env.BOT_OPTIONS ? JSON.parse(process.env.BOT_OPTIONS) : {};
 
-console.log(`[Actuator] Initializing ${botId} for Forge 1.20.1...`);
+console.log(`[Actuator] Initializing ${botId}...`);
 
 // Protocol & NBT Bypasses
 try {
@@ -36,7 +32,7 @@ try {
     nbtProto.read = function (buffer, offset) {
         try { return originalRead.call(this, buffer, offset); } catch (e) { return nbtProto.readAnon(buffer, offset); }
     };
-    console.log('[Actuator] Global protocol/NBT patches applied.');
+    console.log('[Actuator] Protocol bypasses and NBT leniency applied.');
 } catch (e) { console.error(`[Actuator] Patch failed: ${e.message}`); }
 
 const bot = mineflayer.createBot({
@@ -58,151 +54,54 @@ bot.on('inject_allowed', () => {
         const injector = new DynamicRegistryInjector(bot.registry);
         const parsed = injector.parseRegistryPayload(registrySyncBuffer);
         injector.injectBlockToRegistry(parsed);
-        bot.hazards = new Set();
     });
 });
 
 bot.loadPlugin(pathfinder);
 
 bot.on('spawn', () => {
-    const pos = bot.entity.position;
-    console.log(`[Actuator] Spawned at ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`);
+    console.log(`[Actuator] Bot spawned. Initializing physics and pathfinder...`);
     
-    // Enable physics explicitly
+    // Vanilla-standard physics
     bot.physics.enabled = true;
-    bot.entity.velocity.set(0, 0, 0);
-
-    // Movements Setup
+    
+    // Vanilla-standard movements
     const movements = new Movements(bot, mcData); 
     movements.canDig = true;
     movements.allowSprinting = true;
-    movements.allow1by1towers = false; 
-    movements.digCost = 10;
-    movements.placeCost = 10;
+    movements.allow1by1towers = false; // Prevent digging beneath own feet
     
     bot.pathfinder.setMovements(movements);
-    bot.pathfinder.thinkTimeout = 4000; 
+    bot.pathfinder.thinkTimeout = 5000;
     
     console.log('[Actuator] Pathfinder and Physics initialized.');
     bot.chat('Forge AI Player Ready.');
-
-    // Periodic Heartbeat
-    setInterval(() => {
-        if (bot.entity) {
-            const p = bot.entity.position;
-            console.log(`[Heartbeat] Pos: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)} | Ground: ${bot.entity.onGround} | Health: ${bot.health.toFixed(1)}`);
-        }
-    }, 10000);
 });
 
 // Command Handler
-bot.on('chat', async (username, message) => {
+bot.on('chat', (username, message) => {
     if (username === bot.username) return;
-
-    let cmdObj = null;
-
-    // Attempt to parse JSON command format, including multi-line
-    const jsonMatch = message.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-        try {
-            cmdObj = JSON.parse(jsonMatch[0]);
-        } catch (e) {
-            console.log(`[Actuator] Failed to parse JSON command: ${e.message}`);
-        }
-    }
+    const cmd = message.toLowerCase();
 
     try {
-        if (cmdObj) {
-            // JSON Command format
-            const action = cmdObj.action;
-            const target = cmdObj.target;
-
-            if (action === 'come') {
-                const targetPlayer = target || username;
-                const player = bot.players[targetPlayer];
-                if (!player || !player.entity) {
-                    bot.chat(`I cannot see ${targetPlayer}!`);
-                    return;
-                }
-                bot.chat(`Coming to you, ${targetPlayer}!`);
-                bot.pathfinder.setGoal(new goals.GoalFollow(player.entity, 1), true);
-            } else if (action === 'break') {
-                if (!target) {
-                    bot.chat('Missing target coordinates (x,y,z).');
-                    return;
-                }
-                const [x, y, z] = target.split(',').map(n => parseInt(n.trim(), 10));
-                if (isNaN(x) || isNaN(y) || isNaN(z)) {
-                    bot.chat('Invalid coordinates format.');
-                    return;
-                }
-
-                const targetPos = new Vec3(x, y, z);
-                const block = bot.blockAt(targetPos);
-
-                if (!block || block.name === 'air') {
-                    bot.chat('No block there or it is not loaded.');
-                    return;
-                }
-
-                bot.chat(`Moving to break ${block.name} at ${x}, ${y}, ${z}...`);
-
-                try {
-                    // Wait until pathfinder finishes navigating near the block
-                    await bot.pathfinder.goto(new goals.GoalNear(x, y, z, 3));
-
-                    bot.chat(`Breaking ${block.name}...`);
-                    await bot.dig(block);
-                    bot.chat(`Finished breaking ${block.name}.`);
-                } catch (err) {
-                    bot.chat(`Failed to reach or break block: ${err.message}`);
-                }
-
-            } else if (action === 'status') {
-                const p = bot.entity.position;
-                const b = bot.blockAt(p.offset(0, -0.5, 0));
-                bot.chat(`Pos: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)} | Ground: ${bot.entity.onGround} | Block: ${b ? b.name : '?'}`);
-            } else if (action === 'stop') {
-                bot.pathfinder.setGoal(null);
-                bot.chat('Stopped.');
-            } else {
-                bot.chat(`Unknown action: ${action}`);
+        if (cmd === 'come') {
+            const player = bot.players[username];
+            if (!player || !player.entity) {
+                bot.chat('I cannot see you!');
+                return;
             }
-
-        } else {
-            // Legacy plaintext format fallback
-            const parts = message.toLowerCase().split(' ');
-            const cmd = parts[0];
-
-            if (cmd === 'come') {
-                const player = bot.players[username];
-                if (!player || !player.entity) {
-                    bot.chat('I cannot see you!');
-                    return;
-                }
-                bot.chat(`Coming to you, ${username}!`);
-                bot.pathfinder.setGoal(new goals.GoalFollow(player.entity, 1), true);
-            } else if (cmd === 'status') {
-                const p = bot.entity.position;
-                const b = bot.blockAt(p.offset(0, -0.5, 0));
-                bot.chat(`Pos: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)} | Ground: ${bot.entity.onGround} | Block: ${b ? b.name : '?'}`);
-            } else if (cmd === 'stop') {
-                bot.pathfinder.setGoal(null);
-                bot.chat('Stopped.');
-            }
+            bot.chat(`Coming to you, ${username}!`);
+            bot.pathfinder.setGoal(new goals.GoalFollow(player.entity, 1), true);
+        } else if (cmd === 'status') {
+            const pos = bot.entity.position;
+            const block = bot.blockAt(pos.offset(0, -0.5, 0));
+            bot.chat(`Pos: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)} | Ground: ${bot.entity.onGround} | Block: ${block ? block.name : '?'}`);
+        } else if (cmd === 'stop') {
+            bot.pathfinder.setGoal(null);
+            bot.chat('Stopped.');
         }
     } catch (e) {
         console.error(`[Actuator] Chat Command Error: ${e.message}`);
-    }
-});
-
-// Pathfinder Debugging
-bot.on('path_update', (r) => {
-    if (r.status === 'success') {
-        const goal = r.to || (r.path && r.path.length > 0 ? r.path[r.path.length - 1] : null);
-        if (goal) console.log(`[Pathfinder] Path found to ${goal.x.toFixed(1)}, ${goal.y.toFixed(1)}, ${goal.z.toFixed(1)}`);
-    } else if (r.status !== 'partial') {
-        console.log(`[Pathfinder] Failed: ${r.status}`);
     }
 });
 
