@@ -1,11 +1,13 @@
 // agent_manager.js
 const { fork } = require('child_process');
 const path = require('path');
+const LLMClient = require('./llm_client');
 
 class AgentManager {
     constructor() {
         this.bots = new Map(); // Map of botId to ChildProcess
         this.restartingBots = new Set();
+        this.llm = new LLMClient(process.env.OLLAMA_MODEL || 'llama3');
     }
 
     startBot(botId, options) {
@@ -45,6 +47,33 @@ class AgentManager {
             this.triggerRecoveryPipeline(botId, message);
         } else if (message.type === 'LOG') {
             console.log(`[Bot ${botId}] ${message.data}`);
+        } else if (message.type === 'USER_CHAT') {
+            this.processChatWithLLM(botId, message.data);
+        }
+    }
+
+    async processChatWithLLM(botId, data) {
+        console.log(`[AgentManager] Thinking about what ${data.username} said: "${data.message}"...`);
+
+        const prompt = `You are a Minecraft AI bot named ${botId}.
+User '${data.username}' said: "${data.message}"
+Current Environment: ${JSON.stringify(data.environment)}
+
+Decide your next action based on the user's command and your environment.
+Respond ONLY with a valid JSON object.
+Supported actions:
+{"action": "chat", "message": "text"}
+{"action": "come", "target": "player_name"}
+{"action": "goto", "x": 10, "y": 64, "z": 20}
+{"action": "stop"}
+`;
+
+        const action = await this.llm.generateAction(prompt);
+        console.log(`[AgentManager] LLM decided action:`, action);
+
+        const botProcess = this.bots.get(botId);
+        if (botProcess) {
+            botProcess.send({ type: 'EXECUTE_ACTION', action });
         }
     }
 
