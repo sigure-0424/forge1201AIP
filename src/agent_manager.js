@@ -60,16 +60,24 @@ User '${data.username}' said: "${data.message}"
 Current Environment: ${JSON.stringify(data.environment)}
 
 Decide your next action based on the user's command and your environment.
-Respond ONLY with a valid JSON object.
+Respond ONLY with a valid JSON array containing one or more action objects.
+If the user provides only two numbers for coordinates, assign them to X and Z respectively, and omit Y.
 Supported actions:
-{"action": "chat", "message": "text"}
-{"action": "come", "target": "player_name"}
-{"action": "goto", "x": 10, "y": 64, "z": 20}
-{"action": "stop"}
+[{"action": "chat", "message": "text"}]
+[{"action": "come", "target": "player_name"}]
+[{"action": "goto", "x": 10, "z": 20}]
+[{"action": "goto", "x": 10, "y": 64, "z": 20}]
+[{"action": "stop"}]
+[{"action": "collect", "target": "oak_log", "quantity": 64}]
+[{"action": "give", "target": "player_name", "item": "oak_log", "quantity": 64}]
 `;
 
-        const action = await this.llm.generateAction(prompt);
+        let action = await this.llm.generateAction(prompt);
         console.log(`[AgentManager] LLM decided action:`, action);
+
+        if (!Array.isArray(action)) {
+            action = [action];
+        }
 
         const botProcess = this.bots.get(botId);
         if (botProcess) {
