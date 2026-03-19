@@ -155,7 +155,8 @@ Current Environment: ${JSON.stringify(data.environment)}
 
 Decide your next action based on the user's command and your environment.
 *CRITICAL*: You MUST prioritize taking action over conversation. Only use the 'chat' action to report unrecoverable errors or answer direct questions.
-*CRITICAL*: You will receive follow-up 'System' messages letting you know if an action succeeded or failed. If you fail to collect a block, ask the user to provide a proper tool or try an alternative.
+*CRITICAL*: You will receive follow-up 'System' messages letting you know if an action succeeded or failed. If you fail to collect a block, consider crafting a proper tool first (e.g. a wooden_shovel for dirt).
+*CRITICAL*: Always check your inventory. If you are asked to collect dirt, craft a shovel first. If you don't have wood for a shovel, collect wood first. Use the 'craft' action to make items. If you need a crafting table, craft one, 'place' it, and then craft your desired tool.
 Respond ONLY with a valid JSON array containing one or more action objects.
 If the user provides only two numbers for coordinates, assign them to X and Z respectively, and omit Y.
 You may add a 'timeout' parameter (in seconds) to any action (default is 30s).
@@ -168,6 +169,8 @@ Supported actions:
 [{"action": "collect", "target": "oak_log", "quantity": 64, "timeout": 120}]
 [{"action": "give", "target": "player_name", "item": "oak_log", "quantity": 64}]
 [{"action": "equip", "target": "diamond_pickaxe"}]
+[{"action": "craft", "target": "wooden_shovel", "quantity": 1}]
+[{"action": "place", "target": "crafting_table"}]
 `;
 
         if (retryCount > 0) {
