@@ -1115,19 +1115,27 @@ process.on('message', async (msg) => {
         let actions = msg.action;
         if (!Array.isArray(actions)) actions = [actions];
 
-        // Always cancel current actions and wipe the queue to let the new
-        // command override previous goals (essential for stopping loops).
+        // 1. Signal the running loop to stop
         actionQueue = [];
         currentCancelToken.cancelled = true;
         bot.pathfinder.setGoal(null);
-        if (bot.collectBlock.cancelTask) bot.collectBlock.cancelTask();
+        if (bot.collectBlock && typeof bot.collectBlock.cancelTask === 'function') {
+            bot.collectBlock.cancelTask();
+        }
 
-        // If it was just a stop command, we are done
+        // 2. Wait for the current processActionQueue() iteration to exit.
+        //    Without this, assigning a new cancelToken and pushing to the queue
+        //    races with the old loop, causing actions to re-execute or infinite loops.
+        while (isExecuting) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
+
+        // 3. Exit if the command was only "stop"
         if (actions.length === 1 && actions[0].action === 'stop') {
             return;
         }
 
-        // Initialize a new token and enqueue the new instructions
+        // 4. Fresh token + queue for the new command
         currentCancelToken = { cancelled: false };
         actionQueue.push(...actions);
         processActionQueue();
