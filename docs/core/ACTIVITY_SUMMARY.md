@@ -29,3 +29,4 @@ Entries:
 - Removed plaintext API key accidentally committed to GOAL.md; key remains only in .env | docs/core/GOAL.md --claude --TASK-20260320-001-documentation-sync
 - Consolidated npm test to run all 6 test files, added .gitattributes to enforce LF line endings, normalized CRLF files | package.json, .gitattributes, docs/core/STATE.yaml --claude --TASK-20260319-002-consolidate-tests-and-fix-line-endings
 - Fixed 6 bot_actuator issues: come→GoalFollow continuous follow, thinkTimeout 1000→5000, removed 50-block goto cap with waypoints, collect continue-on-skip, muted stop chat, added ensureToolFor auto-tool subroutine; updated agent_manager LLM prompt | src/bot_actuator.js, src/agent_manager.js --claude --TASK-20260319-003-pathfinding-and-collection-fixes
+- Fixed EXECUTE_ACTION race condition: await isExecuting before starting new action queue | src/bot_actuator.js --claude --BUGFIX-20260320-002

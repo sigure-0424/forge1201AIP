@@ -4,6 +4,7 @@ project_short_name: "Forge1201AIP"
 current_goal: "Implement autonomous AI player framework using Mineflayer for Minecraft 1.20.1 Forge environment, including FML3 handshakes and dynamic registry handling."
 active_tasks: []
 recent_changes:
+  - "2026-03-20: Fixed EXECUTE_ACTION race condition: await isExecuting before assigning new cancelToken (BUGFIX-20260320-002)"
   - "2026-03-20: Synced docs; removed plaintext API key from GOAL.md (TASK-20260320-001-documentation-sync)"
   - "2026-03-20: Multi-format LLM response parser (Ollama/OpenAI-chat/completions) + better error diagnostics (BUGFIX-20260320-001)"
   - "2026-03-19: Added 11 boss-defeat actions (eat/smelt/kill/equip_armor/sleep/brew/enchant/explore/navigate_portal/activate_end_portal/place_pattern) + collect reliability fixes (TASK-20260319-004)"
