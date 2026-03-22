@@ -117,13 +117,14 @@ class DynamicRegistryInjector {
                     // fallback cannot resolve an intermediate state ID to the wrong (mod) block.
                     // Without this, beds (16 states), logs (4 states), etc. would appear as stone/air
                     // whenever a mod block was mapped to an ID between the base and its variants.
+                    const remappedBlock = { ...vanillaBlock, id: entry.id };
                     const numStates = (vanillaBlock.maxStateId !== undefined && vanillaBlock.minStateId !== undefined)
                         ? (vanillaBlock.maxStateId - vanillaBlock.minStateId + 1)
                         : 1;
                     for (let s = 0; s < numStates; s++) {
-                        this.registry.blocks[entry.id + s] = vanillaBlock;
+                        this.registry.blocks[entry.id + s] = remappedBlock;
                         if (this.registry.blocksByStateId) {
-                            this.registry.blocksByStateId[entry.id + s] = vanillaBlock;
+                            this.registry.blocksByStateId[entry.id + s] = remappedBlock;
                         }
                     }
                     mappedCount++;
@@ -176,7 +177,7 @@ class DynamicRegistryInjector {
                     // [CRITICAL] Explicitly signal to the physics engine (prismarine-physics) that this is a solid full block
                     if (this.registry.blockCollisionShapes && this.registry.blockCollisionShapes.blocks) {
                         const isBlock = !dictEntry || dictEntry.boundingBox !== 'empty';
-                        this.registry.blockCollisionShapes.blocks[entry.name] = isBlock ? 1 : 0; // 1 = Full cube collision shape, 0 = Air
+                        this.registry.blockCollisionShapes.blocks[entry.id] = isBlock ? 1 : 0; // 1 = Full cube collision shape, 0 = Air
                     }
 
                     dummyCount++;
