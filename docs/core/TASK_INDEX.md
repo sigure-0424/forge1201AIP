@@ -3,6 +3,8 @@
 ## Active
 
 ## Completed
+- TASK-20260320-002-post-fix-smoke-sync: Run npm test and update STATE.yaml and ACTIVITY_SUMMARY.md for race-condition fix
+- TASK-20260320-001-verify-docker-environment: Verify Docker environment and run npm test suite inside container
 - TASK-20260320-001-documentation-sync: Sync docs for boss-defeat actions, LLM multi-format parser, and GOAL.md key removal
 - BUGFIX-20260320-001-llm-multi-format-parser: Multi-format extractText() + better connection error diagnostics in LLM client
 - TASK-20260319-004: Collect reliability fixes + 11 boss-defeat actions (eat, smelt, kill, equip_armor, sleep, brew, enchant, explore, navigate_portal, activate_end_portal, place_pattern)

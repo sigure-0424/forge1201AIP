@@ -4,6 +4,7 @@ project_short_name: "Forge1201AIP"
 current_goal: "Implement autonomous AI player framework using Mineflayer for Minecraft 1.20.1 Forge environment, including FML3 handshakes and dynamic registry handling."
 active_tasks: []
 recent_changes:
+  - "2026-03-22: Fixed isInWater false positive on stone field: DynamicRegistryInjector Proxy fallback was returning the water block object (registry id=32) for unknown Forge stateIds that landed just above vanilla water stateId range 80-95; prismarine-physics then set isInWater=true causing sprint=false and bot spinning in circles. Fix: Proxy get handler now intercepts liquid-block fallbacks and returns stoneTemplate instead; LIQUID_NAMES set covers water/lava/flowing_water/flowing_lava (BUGFIX-20260322-003)"
   - "2026-03-22: Fixed find_land and movement bobbing: (1) find_land now TPs to Seia_Y/any online player instead of /fill (which always failed in all-ocean world — water immediately refilled any stone); (2) physicsTick handler now sets jump=false in water to prevent jump=true persisting from prior land state causing vertical bobbing at 0.28 b/s; (3) testKill filter narrowed to 'Failed to kill' (was 'Failed') to prevent come-action's 'Failed to find Seia_Y' message from being matched (BUGFIX-20260322-002)"
   - "2026-03-22: Added find_land action (uses /spreadplayers 0 0 0 2000 false <bot>) to scatter bot to random dry land before tests; modified test_live.js to call find_land after waitForReady, capture land base position, and use it for goto_return test instead of hardcoded ocean spawn (-10,-28) (BUGFIX-20260322-001)"
   - "2026-03-21: Added sprint-jumping (physicsTick listener after pathfinder's, ~7.1 b/s vs 5.6), robust goto (per-waypoint error recovery, 60s timeout, relaxed stuck detection), come goal auto-recovery (re-sets GoalFollow if cleared externally) (BUGFIX-20260321-006)"
@@ -39,6 +40,6 @@ decisions_index:
 smoke_status:
   last_run: "2026-03-22"
   command: "npm test"
-  result: "passed (6 test files) — after BUGFIX-20260322-002"
+  result: "passed (6 test files) — after BUGFIX-20260322-003"
 hazards:
 \

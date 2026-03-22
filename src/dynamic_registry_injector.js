@@ -199,6 +199,7 @@ class DynamicRegistryInjector {
                                    .filter(k => !isNaN(k))
                                    .sort((a, b) => a - b);
 
+            const LIQUID_NAMES = new Set(['water', 'lava', 'flowing_water', 'flowing_lava']);
             this.registry.blocksByStateId = new Proxy(this.registry.blocksByStateId, {
                 get(target, prop) {
                     if (prop in target) {
@@ -221,9 +222,19 @@ class DynamicRegistryInjector {
                     }
 
                     if (bestKey !== undefined) {
+                        const resolved = target[bestKey];
+                        // CRITICAL: Never return a liquid block as a fallback for unknown
+                        // Forge stateIds. Forge remaps stateIds at runtime; an unknown stone
+                        // stateId can land just above the vanilla water stateId range (80-95),
+                        // causing the binary search to return the water block object (registry
+                        // id=32). prismarine-physics then sets isInWater=true on solid ground,
+                        // disabling sprint and making the bot spin in place.
+                        const safeFallback = (resolved && LIQUID_NAMES.has(resolved.name))
+                            ? stoneTemplate
+                            : resolved;
                         // Cache the result for future O(1) lookups
-                        target[prop] = target[bestKey];
-                        return target[bestKey];
+                        target[prop] = safeFallback;
+                        return safeFallback;
                     }
 
                     return Reflect.get(target, prop); // fallback

@@ -40,6 +40,14 @@ package-lock.json
 kaggle.json
 .kaggle/
 
+# Log files and temp runtime files
+*.log
+*.pid
+log.txt
+prompt_chunk.txt
+ai_debug.json
+test_live_results.json
+
 # Generated / heavy data
 data/raw/**
 data/processed/**
