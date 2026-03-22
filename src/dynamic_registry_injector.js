@@ -113,6 +113,24 @@ class DynamicRegistryInjector {
                 const vanillaBlock = this.registry.blocksByName[modernName || shortName];
 
                 if (vanillaBlock) {
+                    // ── ヒューリスティック衝突チェック ────────────────────────────────────
+                    // heuristicスキャナが誤ってvanillaブロックのstateIdを別ブロックのIDとして
+                    // 読み取る場合がある（例: minecraft:water → id=1 = stone）。
+                    // entry.id が既存のvanillaブロックと衝突する場合はスキップする。
+                    const existingAtId = this.registry.blocks[entry.id];
+                    if (existingAtId && existingAtId.name !== shortName &&
+                        !existingAtId.isUnknownModBlock) {
+                        // 異なるvanillaブロックが既にこのIDに存在する → ヒューリスティック誤検出
+                        console.warn(`[DynamicRegistry] SKIP ${entry.name}@${entry.id}: ` +
+                            `would overwrite existing vanilla block '${existingAtId.name}'. ` +
+                            `Heuristic mismatch.`);
+                        // blocksByName は正しいvanillaブロックを指すよう確認
+                        this.registry.blocksByName[shortName] = vanillaBlock;
+                        if (modernName) this.registry.blocksByName[modernName] = vanillaBlock;
+                        mappedCount++;
+                        continue;
+                    }
+
                     // Re-mapping vanilla blocks: map ALL state variants so the Proxy binary-search
                     // fallback cannot resolve an intermediate state ID to the wrong (mod) block.
                     // Without this, beds (16 states), logs (4 states), etc. would appear as stone/air

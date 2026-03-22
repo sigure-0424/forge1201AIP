@@ -320,7 +320,8 @@ bot.on('spawn', async () => {
                 const atInfo = blockAt ? `${blockAt.name}(id=${blockAt.id},type=${blockAt.type},bb=${blockAt.boundingBox})` : 'null';
                 // Log vanilla water id for comparison
                 const vanillaWaterId = bot.registry.blocksByName['water']?.id;
-                console.log(`[MoveDiag] tick=${_moveDiagTick} pos=(${pos.x.toFixed(1)},${pos.y.toFixed(1)},${pos.z.toFixed(1)}) speed=${speed.toFixed(2)}b/s fwd=${bot.getControlState('forward')} spr=${bot.getControlState('sprint')} jmp=${bot.getControlState('jump')} moving=${moving} mining=${mining} water=${inWater} ground=${onGround} goal=${!!bot.pathfinder.goal} below=${belowInfo} at=${atInfo} vanillaWater=${vanillaWaterId}`);
+                const stateIdBelow = bot.blockAt(pos.offset(0, -1, 0))?.stateId;
+                console.log(`[MoveDiag] tick=${_moveDiagTick} pos=(${pos.x.toFixed(1)},${pos.y.toFixed(1)},${pos.z.toFixed(1)}) speed=${speed.toFixed(2)}b/s fwd=${bot.getControlState('forward')} spr=${bot.getControlState('sprint')} jmp=${bot.getControlState('jump')} moving=${moving} mining=${mining} water=${inWater} ground=${onGround} goal=${!!bot.pathfinder.goal} below=${belowInfo} belowStateId=${stateIdBelow} at=${atInfo} vanillaWater=${vanillaWaterId}`);
             }
         });
     }
