@@ -221,6 +221,17 @@ class DynamicRegistryInjector {
                     dummyCount++;
                 }
             } else if (entry.type === 'item') {
+                // ── 重要: minecraft: namespace のアイテムは vanilla レジストリが正しい ──
+                // バニラのクラフトレシピ（prismarine-recipe等）はVanillaのIDを期待するため、
+                // Forge側のダミーアイテムで上書きするとクラフトが失敗する（例: crafting_table）
+                if (namespace === 'minecraft') {
+                    const vanillaItem = this.registry.itemsByName[shortName];
+                    if (vanillaItem) {
+                        skippedCount++;
+                    }
+                    continue;  // ← minecraft: は一切上書きしない
+                }
+
                 const dummyItem = {
                     id: entry.id,
                     name: entry.name,
