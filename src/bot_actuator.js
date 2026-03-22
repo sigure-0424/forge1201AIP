@@ -265,6 +265,28 @@ bot.on('spawn', async () => {
             const inWater = bot.entity.isInWater;
             const onGround = bot.entity.onGround;
 
+            // ── Modded地形対策: pathfinderがforward=falseにした場合は上書き ──
+            // monitorMovementはmod blockのcollision shapeが不明な場合に
+            // canStraightLine/canSprintJump/canWalkJumpをすべてfalseと判定し
+            // forward=falseをセットする。水中でない場合は強制的に維持する。
+            if (moving && !inWater && !mining && !building) {
+                if (!fwd) {
+                    bot.setControlState('forward', true);
+                }
+                if (!spr) {
+                    bot.setControlState('sprint', true);
+                }
+            }
+
+            // ── Sprint-jumping: 陸上でsprintしている場合はjumpを維持 ──
+            // sprint-jumping (~7.1 b/s) vs sprinting (~5.6 b/s)
+            if (moving && spr && onGround && !inWater && !mining && !building) {
+                bot.setControlState('jump', true);
+            } else if (!moving || inWater) {
+                // 移動していない or 水中の場合はjumpをクリア (sticky jump防止)
+                bot.setControlState('jump', false);
+            }
+
             // Diagnostic: log movement state every 100 ticks (~5 seconds)
             if (_moveDiagTick % 100 === 0 && bot.entity) {
                 const pos = bot.entity.position;
