@@ -229,25 +229,6 @@ bot.on('spawn', async () => {
 
         debouncer = new EventDebouncer(bot, 500);
 
-        // Movement override for modded terrain + sprint-jumping.
-        //
-        // Runs AFTER the pathfinder's monitorMovement (same physicsTick event) because
-        // Node.js EventEmitter fires listeners in registration order — the pathfinder
-        // plugin is loaded first (line 87), so its listener runs first.
-        //
-        // Problem: monitorMovement simulates physics forward (canStraightLine /
-        // canSprintJump / canWalkJump) every tick.  On modded terrain the simulation
-        // hits unknown block collision shapes and fails for ALL three checks.  The
-        // else branch then sets forward=false, STOPPING the bot entirely.  This
-        // caused 0.21 b/s measured speed.
-        //
-        // Fix: when the pathfinder has an active path but decided to stop (forward
-        // is false), override to keep walking.  The pathfinder's own 3.5 s stuck
-        // detector (resetPath('stuck')) handles truly blocked situations.
-        //
-        // Sprint-jumping: Minecraft sprint-jumping (~7.1 b/s) is ~27% faster than
-        // sprinting alone (~5.6 b/s).  We add continuous jumping whenever the bot
-        // is sprinting on flat ground.
         let _moveDiagTick = 0;
         let _lastDiagPos = null;
         bot.on('physicsTick', () => {
@@ -256,36 +237,10 @@ bot.on('spawn', async () => {
             // Water surface detection is now handled inside prismarine-physics
             // (simulatePlayer patch) so isInWater is correct BEFORE this handler fires.
 
-            const fwd = bot.getControlState('forward');
-            const spr = bot.getControlState('sprint');
-            const jmp = bot.getControlState('jump');
             const moving = bot.pathfinder.isMoving();
             const mining = bot.pathfinder.isMining();
-            const building = bot.pathfinder.isBuilding();
             const inWater = bot.entity.isInWater;
             const onGround = bot.entity.onGround;
-
-            // Override: if pathfinder has a path but stopped us, keep walking
-            if (moving && !fwd && !mining && !building) {
-                bot.setControlState('forward', true);
-                if (!inWater) bot.setControlState('sprint', true);
-            }
-
-            // On land, ensure sprint is enabled when path exists
-            if (moving && fwd && !spr && !inWater && !mining && !building) {
-                bot.setControlState('sprint', true);
-            }
-
-            // Sprint-jumping on flat ground (not in water)
-            if (bot.getControlState('sprint') && bot.getControlState('forward') && onGround && !inWater) {
-                bot.setControlState('jump', true);
-            } else if (inWater || (!bot.getControlState('forward') && bot.getControlState('jump'))) {
-                // In water, actively clear jump — otherwise jump=true persists from a
-                // prior land state, causing the bot to repeatedly swim upward ("bobbing")
-                // while barely moving forward.  The pathfinder handles water swimming.
-                // On land, clear jump if not moving forward to prevent sticky hopping in place.
-                bot.setControlState('jump', false);
-            }
 
             // Diagnostic: log movement state every 100 ticks (~5 seconds)
             if (_moveDiagTick % 100 === 0 && bot.entity) {
@@ -305,7 +260,10 @@ bot.on('spawn', async () => {
                 const atInfo = blockAt ? `${blockAt.name}(id=${blockAt.id},type=${blockAt.type},bb=${blockAt.boundingBox})` : 'null';
                 // Log vanilla water id for comparison
                 const vanillaWaterId = bot.registry.blocksByName['water']?.id;
-                console.log(`[MoveDiag] tick=${_moveDiagTick} pos=(${pos.x.toFixed(1)},${pos.y.toFixed(1)},${pos.z.toFixed(1)}) speed=${speed.toFixed(2)}b/s fwd=${bot.getControlState('forward')} spr=${bot.getControlState('sprint')} jmp=${bot.getControlState('jump')} moving=${moving} mining=${mining} water=${inWater} ground=${onGround} goal=${!!bot.pathfinder.goal} below=${belowInfo} at=${atInfo} vanillaWater=${vanillaWaterId}`);
+                const fwd = bot.getControlState('forward');
+                const spr = bot.getControlState('sprint');
+                const jmp = bot.getControlState('jump');
+                console.log(`[MoveDiag] tick=${_moveDiagTick} pos=(${pos.x.toFixed(1)},${pos.y.toFixed(1)},${pos.z.toFixed(1)}) speed=${speed.toFixed(2)}b/s fwd=${fwd} spr=${spr} jmp=${jmp} moving=${moving} mining=${mining} water=${inWater} ground=${onGround} goal=${!!bot.pathfinder.goal} below=${belowInfo} at=${atInfo} vanillaWater=${vanillaWaterId}`);
             }
         });
     }
