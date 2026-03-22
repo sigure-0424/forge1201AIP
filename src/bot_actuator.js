@@ -169,6 +169,15 @@ bot.on('spawn', async () => {
         bot.registry.blocksByName.sand?.id
     ].filter(id => id !== undefined);
 
+    // Prevent bot from getting stuck trying to mine unknown/passable mod blocks
+    if (bot.registry.blocksArray) {
+        for (const block of bot.registry.blocksArray) {
+            if (block.isUnknownModBlock) {
+                movements.blocksCantBreak.add(block.id);
+            }
+        }
+    }
+
     bot.pathfinder.setMovements(movements);
     bot.pathfinder.thinkTimeout = 5000;
     // tickTimeout: ms of A* work per game tick.
@@ -183,7 +192,7 @@ bot.on('spawn', async () => {
         bot.on('health', () => {
             if (bot.food < 15) {
                 const food = getBestFoodItem();
-                if (food && !isExecuting) {
+                if (food && (!bot.pathfinder.isMoving() && !bot.pathfinder.isMining())) {
                     bot.equip(food, 'hand').then(() => bot.consume().catch(() => {}));
                 }
             }
@@ -191,7 +200,7 @@ bot.on('spawn', async () => {
             if (bot.health < _lastHealth && bot.health > 0) {
                 const attacker = findNearestHostile(6);
                 if (attacker) {
-                    if (!isExecuting) equipBestWeapon().catch(() => {});
+                    if (!bot.pathfinder.isMoving() && !bot.pathfinder.isMining()) equipBestWeapon().catch(() => {});
                     if (bot.entity.position.distanceTo(attacker.position) <= 3.5) {
                         bot.attack(attacker);
                     }
@@ -211,7 +220,7 @@ bot.on('spawn', async () => {
         // pathfinder's bot.look() and causing erratic movement.
         _passiveDefenseInterval = setInterval(() => {
             if (!bot.entity || bot.health <= 0) return;
-            if (isExecuting) return;  // Don't interfere with active pathfinding
+            if (bot.pathfinder.isMoving() || bot.pathfinder.isMining()) return;  // Don't interfere with active pathfinding
             const hostile = findNearestHostile(3.5);
             if (!hostile) return;
             bot.attack(hostile);
@@ -270,10 +279,11 @@ bot.on('spawn', async () => {
             // Sprint-jumping on flat ground (not in water)
             if (bot.getControlState('sprint') && bot.getControlState('forward') && onGround && !inWater) {
                 bot.setControlState('jump', true);
-            } else if (inWater) {
+            } else if (inWater || (!bot.getControlState('forward') && bot.getControlState('jump'))) {
                 // In water, actively clear jump — otherwise jump=true persists from a
                 // prior land state, causing the bot to repeatedly swim upward ("bobbing")
                 // while barely moving forward.  The pathfinder handles water swimming.
+                // On land, clear jump if not moving forward to prevent sticky hopping in place.
                 bot.setControlState('jump', false);
             }
 
@@ -841,6 +851,7 @@ async function ensureToolFor(block) {
     const countBy = (set) => bot.inventory.items().filter(i => set.has(i.name)).reduce((s, i) => s + i.count, 0);
 
     // ── Step 1: Gather logs if short on planks ──────────────────────────────
+    if (currentCancelToken.cancelled) return;
     const sticksHave = bot.inventory.items().filter(i => i.name === 'stick').reduce((s, i) => s + i.count, 0);
     const planksNeeded = 3 + (sticksHave >= 2 ? 0 : 2);
 
@@ -848,6 +859,7 @@ async function ensureToolFor(block) {
         const logsNeeded = Math.ceil((planksNeeded - countBy(PLANK_NAMES)) / 4);
         if (countBy(LOG_NAMES) < logsNeeded) {
             for (const logName of LOG_NAMES) {
+                if (currentCancelToken.cancelled) return;
                 const logBlockId = bot.registry.blocksByName[logName]?.id;
                 if (!logBlockId) continue;
                 const logBlocks = bot.findBlocks({ matching: logBlockId, maxDistance: 32, count: logsNeeded });
@@ -856,6 +868,7 @@ async function ensureToolFor(block) {
                 if (logBlocks.length === 0) logBlocks = bot.findBlocks({ matching: logBlockId, maxDistance: 128, count: logsNeeded });
                 if (logBlocks.length === 0) continue;
                 for (const logPos of logBlocks) {
+                    if (currentCancelToken.cancelled) return;
                     if (countBy(LOG_NAMES) >= logsNeeded) break;
                     try {
                         await withTimeout(bot.collectBlock.collect(bot.blockAt(logPos)), 20000,
@@ -868,6 +881,7 @@ async function ensureToolFor(block) {
         }
 
         // ── Step 2: Craft planks ──────────────────────────────────────────────
+        if (currentCancelToken.cancelled) return;
         for (const log of bot.inventory.items().filter(i => LOG_NAMES.has(i.name))) {
             const plankName = log.name.replace(/_log$/, '_planks').replace(/_wood$/, '_planks');
             const plankId = bot.registry.itemsByName[plankName]?.id;
@@ -880,6 +894,7 @@ async function ensureToolFor(block) {
     }
 
     // ── Step 3: Craft sticks ─────────────────────────────────────────────────
+    if (currentCancelToken.cancelled) return;
     if (bot.inventory.items().filter(i => i.name === 'stick').reduce((s, i) => s + i.count, 0) < 2) {
         const anyPlank = bot.inventory.items().find(i => PLANK_NAMES.has(i.name));
         if (anyPlank) {
@@ -890,6 +905,7 @@ async function ensureToolFor(block) {
     }
 
     // ── Step 4: Find or create crafting table, craft tool ───────────────────
+    if (currentCancelToken.cancelled) return;
     const ctBlockId = bot.registry.blocksByName['crafting_table']?.id;
     let craftingTable = ctBlockId !== undefined ? bot.findBlock({ matching: ctBlockId, maxDistance: 32 }) : null;
 
@@ -899,6 +915,7 @@ async function ensureToolFor(block) {
             const ctR = bot.recipesFor(ctItemId, null, 1, false)[0];
             if (ctR) try { await bot.craft(ctR, 1, null); } catch (e) { console.log(`[Actuator] auto-tool craft table: ${e.message}`); }
         }
+        if (currentCancelToken.cancelled) return;
         const ctItem = bot.inventory.items().find(i => i.name === 'crafting_table');
         if (ctItem) {
             try {
@@ -912,6 +929,7 @@ async function ensureToolFor(block) {
         }
     }
 
+    if (currentCancelToken.cancelled) return;
     if (craftingTable) {
         const toolName = `wooden_${toolCat}`;
         const toolId = bot.registry.itemsByName[toolName]?.id;
@@ -920,6 +938,7 @@ async function ensureToolFor(block) {
             if (toolR) {
                 try {
                     await withTimeout(bot.pathfinder.goto(new goals.GoalNear(craftingTable.position.x, craftingTable.position.y, craftingTable.position.z, 1)), 15000, 'goto table (auto-tool)', () => bot.pathfinder.setGoal(null));
+                    if (currentCancelToken.cancelled) return;
                     await bot.craft(toolR, 1, craftingTable);
                     bot.chat(`Crafted a ${toolName}!`);
                 } catch (e) { console.log(`[Actuator] auto-tool craft ${toolName}: ${e.message}`); }

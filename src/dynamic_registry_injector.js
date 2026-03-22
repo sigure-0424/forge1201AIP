@@ -162,6 +162,12 @@ class DynamicRegistryInjector {
                     // The tradeoff: mod blocks at body height ARE treated as diggable
                     // walls.  This adds cost to A* but produces correct, walkable paths.
 
+                    // Mark unknown mod blocks so the bot actuator can add them to movements.blocksCantBreak
+                    // This prevents the bot from getting stuck trying to mine unbreakable/passable mod blocks
+                    if (!dictEntry) {
+                        modBlock.isUnknownModBlock = true;
+                    }
+
                     this.registry.blocks[entry.id] = modBlock;
                     if (this.registry.blocksByStateId) {
                         this.registry.blocksByStateId[entry.id] = modBlock;
