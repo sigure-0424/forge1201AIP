@@ -265,28 +265,6 @@ bot.on('spawn', async () => {
             const inWater = bot.entity.isInWater;
             const onGround = bot.entity.onGround;
 
-            // Override: if pathfinder has a path but stopped us, keep walking
-            if (moving && !fwd && !mining && !building) {
-                bot.setControlState('forward', true);
-                if (!inWater) bot.setControlState('sprint', true);
-            }
-
-            // On land, ensure sprint is enabled when path exists
-            if (moving && fwd && !spr && !inWater && !mining && !building) {
-                bot.setControlState('sprint', true);
-            }
-
-            // Sprint-jumping on flat ground (not in water)
-            if (bot.getControlState('sprint') && bot.getControlState('forward') && onGround && !inWater) {
-                bot.setControlState('jump', true);
-            } else if (inWater || (!bot.getControlState('forward') && bot.getControlState('jump'))) {
-                // In water, actively clear jump — otherwise jump=true persists from a
-                // prior land state, causing the bot to repeatedly swim upward ("bobbing")
-                // while barely moving forward.  The pathfinder handles water swimming.
-                // On land, clear jump if not moving forward to prevent sticky hopping in place.
-                bot.setControlState('jump', false);
-            }
-
             // Diagnostic: log movement state every 100 ticks (~5 seconds)
             if (_moveDiagTick % 100 === 0 && bot.entity) {
                 const pos = bot.entity.position;
