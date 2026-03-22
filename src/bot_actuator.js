@@ -157,7 +157,7 @@ bot.on('spawn', async () => {
     movements = new Movements(bot, mcData);
     movements.canDig = true;
     movements.allowSprinting = true;
-    movements.liquidCost = 3;
+    movements.liquidCost = 100;
     movements.allow1by1towers = true;
     movements.maxDropDown = 4;
 
@@ -253,8 +253,23 @@ bot.on('spawn', async () => {
         bot.on('physicsTick', () => {
             _moveDiagTick++;
 
-            // Water surface detection is now handled inside prismarine-physics
-            // (simulatePlayer patch) so isInWater is correct BEFORE this handler fires.
+            // ── Forge レジストリ再マッピング対策: ブロック名で isInWater を補完 ──
+            // prismarine-physics は vanilla stateId 範囲で水を検出するため、
+            // Forge 再マッピング後の水ブロックを認識できない。
+            if (bot.entity) {
+                const _bFeet  = bot.blockAt(bot.entity.position);
+                const _bChest = bot.blockAt(bot.entity.position.offset(0, 0.5, 0));
+                const _isWaterByName = (b) =>
+                    b && (b.name === 'water' || b.name === 'flowing_water'
+                       || b.name === 'lava'  || b.name === 'flowing_lava');
+
+                if (_isWaterByName(_bFeet) || _isWaterByName(_bChest)) {
+                    // physics シミュレーション後に手動で上書き
+                    // 次 tick の prismarine-physics がリセットするが、
+                    // このハンドラが毎 tick 再設定するため制御状態は正しく保たれる
+                    bot.entity.isInWater = true;
+                }
+            }
 
             const fwd = bot.getControlState('forward');
             const spr = bot.getControlState('sprint');

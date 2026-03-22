@@ -117,10 +117,15 @@ class DynamicRegistryInjector {
                     // fallback cannot resolve an intermediate state ID to the wrong (mod) block.
                     // Without this, beds (16 states), logs (4 states), etc. would appear as stone/air
                     // whenever a mod block was mapped to an ID between the base and its variants.
-                    const remappedBlock = { ...vanillaBlock, id: entry.id };
                     const numStates = (vanillaBlock.maxStateId !== undefined && vanillaBlock.minStateId !== undefined)
                         ? (vanillaBlock.maxStateId - vanillaBlock.minStateId + 1)
                         : 1;
+                    const remappedBlock = {
+                        ...vanillaBlock,
+                        id: entry.id,
+                        minStateId: entry.id,
+                        maxStateId: entry.id + numStates - 1
+                    };
                     for (let s = 0; s < numStates; s++) {
                         this.registry.blocks[entry.id + s] = remappedBlock;
                         if (this.registry.blocksByStateId) {
@@ -204,6 +209,19 @@ class DynamicRegistryInjector {
                 this.registry.itemsByName[entry.name] = dummyItem;
                 this.registry.itemsByName[shortName] = dummyItem;
                 dummyCount++;
+            }
+        }
+
+        // Explicitly register all liquid state IDs to ensure Proxy fallback logic isn't improperly invoked
+        const LIQUID_BLOCK_NAMES = ['water', 'flowing_water', 'lava', 'flowing_lava'];
+        for (const [name, block] of Object.entries(this.registry.blocksByName)) {
+            if (LIQUID_BLOCK_NAMES.includes(name) && block.minStateId !== undefined) {
+                // Ensure blocksByStateId entries are correctly populated
+                for (let sid = block.minStateId; sid <= block.maxStateId; sid++) {
+                    if (!this.registry.blocksByStateId[sid]) {
+                        this.registry.blocksByStateId[sid] = block;
+                    }
+                }
             }
         }
 
