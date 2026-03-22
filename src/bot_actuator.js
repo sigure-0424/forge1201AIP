@@ -270,6 +270,11 @@ bot.on('spawn', async () => {
             // Sprint-jumping on flat ground (not in water)
             if (bot.getControlState('sprint') && bot.getControlState('forward') && onGround && !inWater) {
                 bot.setControlState('jump', true);
+            } else if (inWater) {
+                // In water, actively clear jump — otherwise jump=true persists from a
+                // prior land state, causing the bot to repeatedly swim upward ("bobbing")
+                // while barely moving forward.  The pathfinder handles water swimming.
+                bot.setControlState('jump', false);
             }
 
             // Diagnostic: log movement state every 100 ticks (~5 seconds)
@@ -346,6 +351,11 @@ bot.on('spawn', async () => {
     // Run water/ground escape asynchronously so it doesn't block IPC actions.
     // If an IPC action cancels the pathfinder, the escape may abort — that's fine.
     (async () => {
+    // Skip water escape if IPC actions are already queued (e.g. find_land will handle positioning).
+    if (isExecuting || actionQueue.length > 0) {
+        console.log('[Actuator] IPC actions queued — skipping background water escape.');
+        return;
+    }
     // If bot is not on recognizable solid ground, try to find and tp to solid vanilla terrain.
     // This handles: (1) ocean spawn, (2) spawn above modded blocks that appear as air to our registry.
     if (!bot.entity.onGround) {
@@ -1823,25 +1833,78 @@ async function processActionQueue() {
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: msg, environment: getEnvironmentContext() } });
                 }
 
-            // ── find_land (spreadplayers to random land, for test setup) ──────
+            // ── find_land ─────────────────────────────────────────────────────────
+            // Strategy: TP to the known test player (Seia_Y / any online player) who
+            // should already be standing on dry land / a prepared stone field.
+            // This replaces the /fill approach which always failed in this all-ocean
+            // world (water immediately refills any /fill stone).
             } else if (action.action === 'find_land') {
-                const preLandPos = bot.entity.position.clone();
-                bot.chat(`/spreadplayers 0 0 0 2000 false ${bot.username}`);
-                // Wait for teleport to apply and chunks to load
-                await new Promise(resolve => setTimeout(resolve, 4000));
-                try { await bot.waitForChunksToLoad(); } catch (e) {}
-                await new Promise(resolve => setTimeout(resolve, 2000));
+                // ── Step 1: Teleport to a player on dry land ──────────────────────
+                const candidateNames = ['Seia_Y', 'Seia_y'];
+                let tpTargetName = null;
+                for (const name of candidateNames) {
+                    if (bot.players[name]?.entity) { tpTargetName = name; break; }
+                }
+                if (!tpTargetName) {
+                    const other = Object.values(bot.players)
+                        .find(p => p.username !== bot.username && p.entity);
+                    if (other) tpTargetName = other.username;
+                }
+
+                if (tpTargetName) {
+                    console.log(`[find_land] Teleporting to player: ${tpTargetName}`);
+                    bot.chat(`/tp ${bot.username} ${tpTargetName}`);
+                    await new Promise(r => setTimeout(r, 3000));
+                    try { await bot.waitForChunksToLoad(); } catch (e) {}
+                    await new Promise(r => setTimeout(r, 1000));
+                } else {
+                    console.log('[find_land] No players online — using current position.');
+                }
+
+                // ── Step 2: Survival buffs + give oak_log for crafting test ───────
+                bot.chat(`/effect give ${bot.username} minecraft:resistance 600 10 true`);
+                bot.chat(`/effect give ${bot.username} minecraft:saturation 600 10 true`);
+                await new Promise(r => setTimeout(r, 200));
+                bot.chat(`/give ${bot.username} minecraft:oak_log 16`);
+
+                // ── Step 3: Find the ground Y from actual position post-TP ─────────
+                const pos0 = bot.entity.position;
+                const gx = Math.round(pos0.x), gz = Math.round(pos0.z);
+                // Scan downward from bot feet to find first solid non-water block
+                let groundY = Math.floor(pos0.y) - 1;
+                for (let dy = 0; dy >= -15; dy--) {
+                    const b = bot.blockAt(new Vec3(gx, Math.floor(pos0.y) + dy, gz));
+                    if (b && b.boundingBox === 'block' && !b.name.includes('water')) {
+                        groundY = Math.floor(pos0.y) + dy;
+                        break;
+                    }
+                }
+                const logY = groundY + 1; // surface = 1 above detected ground
+
+                // ── Step 4: Place 5 oak_log columns (separate XZ → collect dedup OK) ─
+                const logOffsets = [[3,3],[4,3],[5,3],[6,3],[7,3]];
+                for (const [dx, dz] of logOffsets) {
+                    bot.chat(`/setblock ${gx + dx} ${logY} ${gz + dz} minecraft:oak_log`);
+                    await new Promise(r => setTimeout(r, 150));
+                }
+
+                // ── Step 5: Summon test animals on the surface ────────────────────
+                bot.chat(`/summon minecraft:cow ${gx + 8} ${logY} ${gz + 8}`);
+                bot.chat(`/summon minecraft:pig ${gx + 6} ${logY} ${gz + 6}`);
+                bot.chat(`/summon minecraft:chicken ${gx + 4} ${logY} ${gz + 4}`);
+                await new Promise(r => setTimeout(r, 500));
+
+                if (movements) bot.pathfinder.setMovements(movements);
+
                 const landPos = bot.entity.position;
-                const dist = landPos.distanceTo(preLandPos);
                 const blockBelow = bot.blockAt(landPos.offset(0, -1, 0));
-                const blockAt = bot.blockAt(landPos);
                 const onLand = bot.entity.onGround &&
                     blockBelow && blockBelow.boundingBox === 'block' &&
-                    !blockBelow.name.includes('water') &&
-                    !(blockAt?.name?.includes('water'));
+                    !blockBelow.name.includes('water');
                 const msg = onLand
-                    ? `Found land at (${Math.round(landPos.x)}, ${Math.round(landPos.y)}, ${Math.round(landPos.z)}). Ready for testing.`
-                    : `find_land: pos=(${Math.round(landPos.x)},${Math.round(landPos.y)},${Math.round(landPos.z)}) onGround=${bot.entity.onGround} below=${blockBelow?.name}. Proceeding anyway.`;
+                    ? `Platform ready. Bot at (${Math.round(landPos.x)},${Math.round(landPos.y)},${Math.round(landPos.z)}). Logs+animals placed.`
+                    : `find_land: At (${Math.round(landPos.x)},${Math.round(landPos.y)},${Math.round(landPos.z)}) onGround=${bot.entity.onGround} below=${blockBelow?.name}.`;
+                console.log(`[find_land] ${msg}`);
                 process.send({ type: 'USER_CHAT', data: { username: "System", message: msg, environment: getEnvironmentContext() } });
 
             } // end action dispatch

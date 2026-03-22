@@ -228,7 +228,7 @@ async function testKill(botId, target, quantity, label) {
 
     const result = await waitForMessage(botId, m =>
         m.type === 'USER_CHAT' && m.data.username === 'System' &&
-        (m.data.message.includes('killed') || m.data.message.includes('not found') || m.data.message.includes('Failed')),
+        (m.data.message.includes('killed') || m.data.message.includes('not found') || m.data.message.includes('Failed to kill')),
         65000
     );
 
@@ -244,18 +244,19 @@ async function testKill(botId, target, quantity, label) {
 }
 
 async function testFindLand(botId) {
-    console.log('\n=== SETUP: Finding land via /spreadplayers ===');
+    console.log('\n=== SETUP: Building test platform via OP commands ===');
     sendAction(botId, { action: 'find_land' });
 
+    // Up to 45s: fill poll (20s) + setblocks + summon + TP + chunk load
     const result = await waitForMessage(botId, m =>
         m.type === 'USER_CHAT' && m.data.username === 'System' &&
-        (m.data.message.includes('Found land') || m.data.message.includes('find_land:')),
-        30000
+        (m.data.message.includes('Platform ready') || m.data.message.includes('find_land:')),
+        90000
     );
 
     const msg = result ? result.data.message : 'timeout - proceeding with current position';
     console.log(`[Test Setup] ${msg}`);
-    // Extra settle time after teleport
+    // Extra settle time after large teleport
     await sleep(3000);
     return result;
 }

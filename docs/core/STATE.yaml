@@ -4,6 +4,7 @@ project_short_name: "Forge1201AIP"
 current_goal: "Implement autonomous AI player framework using Mineflayer for Minecraft 1.20.1 Forge environment, including FML3 handshakes and dynamic registry handling."
 active_tasks: []
 recent_changes:
+  - "2026-03-22: Fixed find_land and movement bobbing: (1) find_land now TPs to Seia_Y/any online player instead of /fill (which always failed in all-ocean world — water immediately refilled any stone); (2) physicsTick handler now sets jump=false in water to prevent jump=true persisting from prior land state causing vertical bobbing at 0.28 b/s; (3) testKill filter narrowed to 'Failed to kill' (was 'Failed') to prevent come-action's 'Failed to find Seia_Y' message from being matched (BUGFIX-20260322-002)"
   - "2026-03-22: Added find_land action (uses /spreadplayers 0 0 0 2000 false <bot>) to scatter bot to random dry land before tests; modified test_live.js to call find_land after waitForReady, capture land base position, and use it for goto_return test instead of hardcoded ocean spawn (-10,-28) (BUGFIX-20260322-001)"
   - "2026-03-21: Added sprint-jumping (physicsTick listener after pathfinder's, ~7.1 b/s vs 5.6), robust goto (per-waypoint error recovery, 60s timeout, relaxed stuck detection), come goal auto-recovery (re-sets GoalFollow if cleared externally) (BUGFIX-20260321-006)"
   - "2026-03-21: Fixed follow broken by 6 compounding bugs: (1) self-defense handler called setGoal(null) on ANY damage, permanently destroying GoalFollow — removed; (2) spawn handler added duplicate event listeners on every respawn — guarded with _spawnInitDone flag; (3) boundingBox='empty' with shapes=full-cube caused pathfinder/physics disagreement (A* planned through solid blocks, physics blocked them) — reverted to consistent 'block'; (4) passive defense bot.attack() changed look direction during pathfinding — now skipped when isExecuting; (5) synchronous file I/O (appendFileSync/writeFileSync) blocked event loop 1-10ms per call — switched to async; (6) tickTimeout=40ms consumed 800ms/s CPU — restored to 10ms (original working value) (BUGFIX-20260321-005)"
@@ -38,6 +39,6 @@ decisions_index:
 smoke_status:
   last_run: "2026-03-22"
   command: "npm test"
-  result: "passed (6 test files) — after BUGFIX-20260322-001"
+  result: "passed (6 test files) — after BUGFIX-20260322-002"
 hazards:
 \
