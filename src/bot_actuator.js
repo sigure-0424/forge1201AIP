@@ -1569,9 +1569,10 @@ async function processActionQueue() {
 
             // ── place ─────────────────────────────────────────────────────────
             } else if (action.action === 'place') {
-                const blockId = bot.registry.blocksByName[action.target]?.id || bot.registry.itemsByName[action.target]?.id;
-                if (blockId !== undefined) {
-                    const itemToPlace = bot.inventory.items().find(item => item.type === blockId);
+                const blockId = bot.registry.blocksByName[action.target]?.id;
+                const itemId = bot.registry.itemsByName[action.target]?.id;
+                if (blockId !== undefined || itemId !== undefined) {
+                    const itemToPlace = bot.inventory.items().find(item => item.name === action.target || (itemId !== undefined && item.type === itemId));
                     if (itemToPlace) {
                         try {
                             await bot.equip(itemToPlace, 'hand');
