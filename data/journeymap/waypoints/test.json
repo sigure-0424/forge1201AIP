@@ -1,0 +1,17 @@
+{
+  "id": "test",
+  "name": "Base",
+  "icon": "waypoint-normal.png",
+  "x": 100,
+  "y": 64,
+  "z": 100,
+  "r": 156,
+  "g": 36,
+  "b": 36,
+  "enable": true,
+  "type": "Normal",
+  "origin": "journeymap",
+  "dimensions": [
+    "minecraft:overworld"
+  ]
+}

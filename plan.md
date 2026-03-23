@@ -1,134 +1,25 @@
-1. *Fix noisy logging:*
-  - Edit `src/bot_actuator.js` to wrap specific `console.log` calls in `if (process.env.DEBUG === 'true') { ... }`.
-  - The target lines are `[ServerPos]` (line 100), `[MoveDiag]` (line 266), `[SpawnDiag]` (line 281), and `[GroundDiag]` (line 484).
-  - Use `replace_with_git_merge_diff` to apply these conditionals.
-  - Verify changes via `cat src/bot_actuator.js | grep "process.env.DEBUG"`.
+1. **Handle unbreakable/dangerous mod blocks:** Add logic in `bot_actuator.js` and `dynamic_registry_injector.js` to mark magma blocks and potentially dangerous mod blocks to the `movements.blocksCantBreak` and `movements.blocksToAvoid` so the bot avoids or doesn't mine them. Only construct/terrain blocks can be broken. Update block mapping fallback logic to prevent getting stuck mining things it shouldn't.
 
-2. *Improve tool crafting (Stone Upgrade & Chests):*
-  - Edit `src/bot_actuator.js` `ensureToolFor` function.
-  - Insert the following chest scanning logic at the beginning of `ensureToolFor` (after basic validation):
-    ```javascript
-    const chestId = bot.registry.blocksByName.chest?.id;
-    if (chestId !== undefined) {
-        const chests = bot.findBlocks({ matching: chestId, maxDistance: 16, count: 5 });
-        for (const cpos of chests) {
-            if (currentCancelToken.cancelled) return;
-            try {
-                const chestBlock = bot.blockAt(cpos);
-                if (chestBlock) {
-                    await withTimeout(bot.pathfinder.goto(new goals.GoalNear(cpos.x, cpos.y, cpos.z, 2)), 10000, 'goto chest', () => bot.pathfinder.setGoal(null));
-                    const chestWindow = await bot.openContainer(chestBlock);
-                    const neededItems = [`iron_${toolCat}`, `stone_${toolCat}`, `wooden_${toolCat}`, 'iron_ingot', 'cobblestone'];
-                    for (const item of chestWindow.containerItems()) {
-                        if (neededItems.includes(item.name)) {
-                            await chestWindow.withdraw(item.type, null, item.name.endsWith(toolCat) ? 1 : Math.min(item.count, 64));
-                        }
-                    }
-                    bot.closeWindow(chestWindow);
-                }
-            } catch(e) {
-                console.log(`[Actuator] ensureToolFor chest scan: ${e.message}`);
-            }
-            // Re-check if we now have a tool after looting
-            const itemsPostChest = bot.inventory.items();
-            if (itemsPostChest.some(i => (hasRequirement && block.harvestTools[i.type]) || (!hasRequirement && i.name.endsWith(toolSuffix)))) {
-                await equipBestTool(block); return;
-            }
-        }
-    }
-    ```
-  - Modify the tool name resolution before crafting. Replace the block from line 1115 (`const toolName = \`wooden_\${toolCat}\`;`) in `ensureToolFor` to:
-    ```javascript
-        let toolName = `wooden_${toolCat}`;
-        const invNames = new Set(bot.inventory.items().map(i => i.name));
-        if (invNames.has('iron_ingot')) { toolName = `iron_${toolCat}`; }
-        else if (invNames.has('cobblestone')) { toolName = `stone_${toolCat}`; }
+2. **Handle journeyMap waypoints:** Add logic to read from `journeymap` directory and allow the bot to process coordinates from waypoints. Introduce logic in `agent_manager.js` to parse `journeyMap 5.10.3` waypoints by loading `data/journeymap/waypoints/*.json` when the user instructs to go to a waypoint name.
 
-        const toolId = bot.registry.itemsByName[toolName]?.id;
-        if (toolId !== undefined) {
-            const toolR = bot.recipesFor(toolId, null, 1, true)[0];
-            if (toolR) {
-                try {
-                    await withTimeout(bot.pathfinder.goto(new goals.GoalNear(craftingTable.position.x, craftingTable.position.y, craftingTable.position.z, 1)), 15000, 'goto table (auto-tool)', () => bot.pathfinder.setGoal(null));
-                    if (currentCancelToken.cancelled) return;
-                    await bot.craft(toolR, 1, craftingTable);
-                    bot.chat(`Crafted a ${toolName}!`);
-                } catch (e) { console.log(`[Actuator] auto-tool craft ${toolName}: ${e.message}`); }
-            }
-        }
-    ```
-  - Use `replace_with_git_merge_diff` to insert this code into `ensureToolFor`.
-  - Verify changes via `cat src/bot_actuator.js | grep "openContainer"`.
+3. **Shield, Axe, Sword usage and Drop Item Collection:** Update `bot_actuator.js` to handle combat efficiently using shield (off-hand), and prefer axe/sword. Add an explicit check in `bot.on('health')` and `passiveDefenseInterval` for shield usage/blocking logic and to ensure dropped items after kills are collected using pathfinder to the drops.
 
-3. *Implement vein mining (一括破壊):*
-  - Edit `src/bot_actuator.js` inside the `collect` action.
-  - Replace the `debouncer.isCascadingWait` block (lines 1464-1470) with a concrete BFS loop.
-  - Code to insert:
-    ```javascript
-                                let veinMined = 1;
-                                const queue = [blockPos];
-                                const visited = new Set([`${blockPos.x},${blockPos.y},${blockPos.z}`]);
-                                const offsets = [{x:1,y:0,z:0}, {x:-1,y:0,z:0}, {x:0,y:1,z:0}, {x:0,y:-1,z:0}, {x:0,y:0,z:1}, {x:0,y:0,z:-1}];
+4. **Disable commands in normal start:** Add an environment variable or config check `process.env.MODE` or similar in `index.js`. If started normally via `node index.js`, the bot shouldn't automatically run tasks unless specific conditions are met.
 
-                                while(queue.length > 0 && veinMined < 64 && collected + veinMined < quantity && !currentCancelToken.cancelled) {
-                                    const curr = queue.shift();
-                                    for (const off of offsets) {
-                                        const nx = curr.x + off.x, ny = curr.y + off.y, nz = curr.z + off.z;
-                                        const key = `${nx},${ny},${nz}`;
-                                        if (!visited.has(key)) {
-                                            visited.add(key);
-                                            const adjBlock = bot.blockAt(new Vec3(nx, ny, nz));
-                                            if (adjBlock && searchIds.includes(adjBlock.type)) {
-                                                const held = bot.inventory.slots[bot.getEquipmentDestSlot('hand')];
-                                                if (held && held.maxDurability) {
-                                                    const usesLeft = held.maxDurability - (held.durabilityUsed || 0);
-                                                    if (usesLeft <= 5) break;
-                                                }
-                                                try {
-                                                    await withTimeout(bot.pathfinder.goto(new goals.GoalNear(nx, ny, nz, 2)), 5000, 'vein goto', () => bot.pathfinder.setGoal(null));
-                                                    await bot.lookAt(adjBlock.position.offset(0.5, 0.5, 0.5));
-                                                    await withTimeout(bot.dig(adjBlock, true), maxDigMs, 'vein dig', () => {});
-                                                    queue.push(adjBlock.position);
-                                                    veinMined++;
-                                                } catch(e) {}
-                                            }
-                                        }
-                                    }
-                                }
-    ```
-  - Apply changes using `replace_with_git_merge_diff`.
-  - Verify changes via `cat src/bot_actuator.js | grep "veinMined"`.
+5. **Respawn Point Setting:** Add an action or logic to set a respawn point (using a bed).
 
-4. *Support multiple bots:*
-  - Edit `index.js`.
-  - Replace the lines:
-    ```javascript
-    const botId = process.env.BOT_NAME || 'AI_Bot_01';
-    ```
-    with:
-    ```javascript
-    const botNamesStr = process.env.BOT_NAMES || process.env.BOT_NAME || 'AI_Bot_01';
-    const botNames = botNamesStr.split(',').map(n => n.trim());
-    ```
-  - And replace the lines:
-    ```javascript
-    // Start a single bot instance for now
-    manager.startBot(botId, { host, port });
-    ```
-    with:
-    ```javascript
-    // Start bot instances
-    for (const name of botNames) {
-        manager.startBot(name, { host, port });
-    }
-    ```
-  - Apply changes using `replace_with_git_merge_diff`.
-  - Verify changes via `cat index.js`.
+6. **Nether Portal Passage:** Fix the `navigate_portal` logic. Currently, it stops at the portal edge. We need to force it to step *into* the portal block (the `nether_portal` block) using explicit control states (forward=true) when standing next to it to cross dimensions successfully.
 
-5. *Run tests:*
-  - Run project tests via `npm test` and `npm run test:e2e` to ensure changes are correct and no regressions were introduced.
+7. **Initial Equipment Chest:** Add logic to locate the specific chest (the one with smooth stone underneath it) as an initial equipment chest, allowing the bot to freely loot and equip from it. Add this to `getEnvironmentContext` or initialization phase.
 
-6. *Pre commit steps:*
-  - Complete pre-commit steps to ensure proper testing, verification, review, and reflection are done.
+8. **GraveStone Mod Recovery:** Implement recovery sequence for the graveStone mod. Upon death (if not abyss), bot pathfinds to the death location and breaks the grave block to collect items.
 
-7. *Submit the change.*
+9. **Task Modes & Chat Processing:**
+   - Define execution modes: `Full Auto` (no break), `Auto` (conditional break), and `Task Mode`.
+   - Implement chat parsing to detect `mode: [ModeName]`.
+   - If in Task Mode or a mode is set, don't ping LLM, but process commands directly via internal logic or loaded JSON tasks.
+   - Set up reading from a pre-configured JSON file for Task Mode execution.
+
+10. **Pre-configured JSON Tasks:** Enhance Agent Manager to read a JSON file with an array of actions and dispatch them without LLM when in "Task Mode".
+
+11. **Auto to Task Mode switch:** Add logic to keep track of action count. If in `Full Auto` and actions exceed a threshold, automatically switch to `Task Mode` and begin executing from the pre-defined JSON.

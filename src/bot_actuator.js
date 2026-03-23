@@ -169,13 +169,48 @@ bot.on('spawn', async () => {
         bot.registry.blocksByName.sand?.id
     ].filter(id => id !== undefined);
 
-    // Prevent bot from getting stuck trying to mine unknown/passable mod blocks
+    // Goal 1: Restrict breaking to terrain/natural blocks only to avoid destroying structures.
+    // If a block doesn't match these natural types, add it to blocksCantBreak.
     if (bot.registry.blocksArray) {
         for (const block of bot.registry.blocksArray) {
             if (block.isUnknownModBlock) {
                 movements.blocksCantBreak.add(block.id);
+            } else {
+                const name = block.name.toLowerCase();
+                const isNaturalTerrain = name.includes('dirt') || name.includes('stone') ||
+                                         name.includes('grass') || name.includes('sand') ||
+                                         name.includes('gravel') || name.includes('clay') ||
+                                         name.includes('netherrack') || name.includes('end_stone') ||
+                                         name.includes('ore') || name.includes('log') ||
+                                         name.includes('leaves') || name.includes('wood') ||
+                                         name.includes('snow') || name.includes('ice') ||
+                                         name.includes('obsidian');
+
+                // Allow some utility blocks like crops/plants to be broken if needed,
+                // but strictly block obvious manufactured blocks (planks, glass, bricks, etc.)
+                const isManufactured = name.includes('planks') || name.includes('glass') ||
+                                       name.includes('brick') || name.includes('slab') ||
+                                       name.includes('stair') || name.includes('wall') ||
+                                       name.includes('fence') || name.includes('door') ||
+                                       name.includes('bed') || name.includes('chest') ||
+                                       name.includes('table') || name.includes('furnace') ||
+                                       name.includes('concrete') || name.includes('terracotta') ||
+                                       name.includes('wool') || name.includes('carpet');
+
+                if (isManufactured || !isNaturalTerrain) {
+                    movements.blocksCantBreak.add(block.id);
+                }
             }
         }
+    }
+
+    // Goal 1 & 2: Avoid magma block damage & only break specific blocks (e.g. non-construct blocks)
+    // Add magma_block to blocksCantBreak and set its pathfinding cost higher if it was toAvoid
+    const magmaBlockId = bot.registry.blocksByName['magma_block']?.id;
+    if (magmaBlockId !== undefined) {
+        movements.blocksCantBreak.add(magmaBlockId);
+        // Force A* to avoid magma blocks if possible (treat as lava)
+        movements.blocksToAvoid.add(magmaBlockId);
     }
 
     bot.pathfinder.setMovements(movements);
@@ -214,6 +249,20 @@ bot.on('spawn', async () => {
             _lastHealth = bot.health;
         });
 
+        // Goal 8: GraveStone Mod Recovery (remember death position)
+        bot.on('death', () => {
+            if (bot.entity && bot.entity.position && bot.entity.position.y > -60) {
+                bot.chat('I died! Attempting to retrieve my GraveStone...');
+                console.log(`[Actuator] Bot died. Memorizing death position for GraveStone recovery.`);
+                const deathPos = bot.entity.position.clone();
+                // Queue recovery action on next spawn cycle
+                actionQueue.unshift({
+                    action: 'recover_gravestone',
+                    target: deathPos
+                });
+            }
+        });
+
         // Passive defense: attack nearby hostiles.
         // Only attack when the bot is IDLE — during active pathfinding the
         // bot.attack() call changes the look direction, conflicting with the
@@ -222,9 +271,19 @@ bot.on('spawn', async () => {
             if (!bot.entity || bot.health <= 0) return;
             if (bot.pathfinder.isMoving() || bot.pathfinder.isMining()) return;  // Don't interfere with active pathfinding
             const hostile = findNearestHostile(3.5);
-            if (!hostile) return;
+            if (!hostile) {
+                bot.deactivateItem();
+                return;
+            }
+            bot.deactivateItem();
             bot.attack(hostile);
             equipBestWeapon().catch(() => {});
+
+            // Shield up after attacking
+            const offHand = bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')];
+            if (offHand && offHand.name === 'shield') {
+                bot.activateItem(true);
+            }
         }, 600);
 
         debouncer = new EventDebouncer(bot, 500);
@@ -285,6 +344,28 @@ bot.on('spawn', async () => {
             }
         } catch (e) {}
     }
+
+    // Goal 7: Locate initial equipment chest (Chest above smooth_stone)
+    try {
+        const chestId = bot.registry.blocksByName['chest']?.id;
+        if (chestId !== undefined) {
+            const chests = bot.findBlocks({ matching: chestId, maxDistance: 32, count: 20 });
+            for (const cpos of chests) {
+                const below = bot.blockAt(cpos.offset(0, -1, 0));
+                if (below && below.name === 'smooth_stone') {
+                    console.log(`[Actuator] Found initial equipment chest at ${cpos}. Fetching gear...`);
+                    bot.chat(`I see an equipment chest! Gearing up...`);
+
+                    // Queue an immediate task to go open it and loot
+                    actionQueue.unshift({
+                        action: 'loot_chest_special',
+                        target: cpos
+                    });
+                    break;
+                }
+            }
+        }
+    } catch(e) {}
 
     // ── Mark bot ready EARLY so test harness can start, then escape water in background ──
     bot.chat('Forge AI Player Ready.');
@@ -950,13 +1031,17 @@ async function equipBestTool(block) {
 }
 
 const WEAPON_PRIORITY = [
-    'netherite_sword', 'diamond_sword', 'iron_sword', 'stone_sword', 'wooden_sword', 'golden_sword',
-    'netherite_axe', 'diamond_axe', 'iron_axe', 'stone_axe', 'wooden_axe', 'golden_axe'
+    'netherite_axe', 'diamond_axe', 'iron_axe', 'netherite_sword', 'diamond_sword', 'iron_sword',
+    'stone_axe', 'stone_sword', 'wooden_axe', 'wooden_sword', 'golden_axe', 'golden_sword'
 ];
 async function equipBestWeapon() {
     for (const name of WEAPON_PRIORITY) {
         const w = bot.inventory.items().find(i => i.name === name);
-        if (w) { try { await bot.equip(w, 'hand'); } catch (e) {} return; }
+        if (w) { try { await bot.equip(w, 'hand'); } catch (e) {} break; }
+    }
+    const shield = bot.inventory.items().find(i => i.name === 'shield');
+    if (shield) {
+        try { await bot.equip(shield, 'off-hand'); } catch (e) {}
     }
 }
 
@@ -1237,6 +1322,66 @@ async function processActionQueue() {
             if (action.action === 'chat') {
                 bot.chat(action.message);
 
+            // ── loot_chest_special ────────────────────────────────────────────
+            } else if (action.action === 'loot_chest_special') {
+                const targetPos = action.target;
+                if (targetPos) {
+                    try {
+                        bot.chat(`Heading to equipment chest...`);
+                        await withTimeout(bot.pathfinder.goto(new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 2)), 30000, 'goto equipment chest', () => bot.pathfinder.setGoal(null));
+                        const block = bot.blockAt(new Vec3(targetPos.x, targetPos.y, targetPos.z));
+                        if (block && block.name === 'chest') {
+                            const chestWindow = await bot.openContainer(block);
+                            // Loot everything
+                            for (const item of chestWindow.containerItems()) {
+                                if (currentCancelToken.cancelled) break;
+                                try {
+                                    await chestWindow.withdraw(item.type, null, item.count);
+                                } catch(e) {}
+                            }
+                            bot.closeWindow(chestWindow);
+                            bot.chat(`Geared up from the chest!`);
+                            await equipBestArmor();
+                            await equipBestWeapon();
+                        }
+                    } catch(e) {
+                        console.log(`[Actuator] Failed to loot special chest: ${e.message}`);
+                    }
+                }
+
+            // ── recover_gravestone ────────────────────────────────────────────
+            } else if (action.action === 'recover_gravestone') {
+                const targetPos = action.target;
+                if (targetPos) {
+                    try {
+                        bot.chat(`Navigating to death coordinates X:${Math.round(targetPos.x)} Z:${Math.round(targetPos.z)} to recover grave...`);
+                        await withTimeout(bot.pathfinder.goto(new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 2)), Math.max(timeoutMs, 60000), 'goto gravestone', () => bot.pathfinder.setGoal(null));
+
+                        // Look around for a gravestone block (it may have a modded name, so we search generically or by known name substring)
+                        const graveIds = Object.values(bot.registry.blocksByName)
+                            .filter(b => b.name.toLowerCase().includes('grave'))
+                            .map(b => b.id);
+
+                        if (graveIds.length > 0) {
+                            const graveBlocks = bot.findBlocks({ matching: graveIds, maxDistance: 10, count: 5 });
+                            if (graveBlocks.length > 0) {
+                                bot.chat(`Found GraveStone. Digging it...`);
+                                const graveBlock = bot.blockAt(graveBlocks[0]);
+                                await bot.dig(graveBlock, true);
+                                await new Promise(r => setTimeout(r, 1000));
+                                bot.chat(`Recovered items from GraveStone.`);
+                            } else {
+                                bot.chat(`Could not find a GraveStone block nearby.`);
+                            }
+                        } else {
+                            bot.chat(`No GraveStone block type registered. Or grave already broken.`);
+                        }
+                    } catch (e) {
+                        console.log(`[Actuator] Failed to recover grave: ${e.message}`);
+                        bot.chat(`Failed to reach GraveStone.`);
+                    }
+                }
+
             // ── dump_chunks ───────────────────────────────────────────────────
             } else if (action.action === 'dump_chunks') {
                 bot.chat("Dumping loaded chunks to chunk_dump.json...");
@@ -1330,14 +1475,44 @@ async function processActionQueue() {
             // ── goto (waypoints, no distance cap) ────────────────────────────
             } else if (action.action === 'goto') {
                 const WAYPOINT_STEP = 64;
-                const destX = action.x, destZ = action.z;
+                let destX = action.x;
+                let destY = action.y;
+                let destZ = action.z;
+
+                // Goal 3: journeyMap waypoint support
+                if (action.target && typeof action.target === 'string') {
+                    const wpPath = path.join(process.cwd(), 'data', 'journeymap', 'waypoints');
+                    let foundWaypoint = false;
+                    if (fs.existsSync(wpPath)) {
+                        const files = fs.readdirSync(wpPath).filter(f => f.endsWith('.json'));
+                        for (const file of files) {
+                            try {
+                                const data = JSON.parse(fs.readFileSync(path.join(wpPath, file), 'utf8'));
+                                if (data.name && data.name.toLowerCase() === action.target.toLowerCase()) {
+                                    destX = data.x;
+                                    destY = data.y;
+                                    destZ = data.z;
+                                    foundWaypoint = true;
+                                    bot.chat(`Found waypoint ${data.name} at X:${destX}, Y:${destY}, Z:${destZ}`);
+                                    break;
+                                }
+                            } catch(e) {}
+                        }
+                    }
+                    if (!foundWaypoint) {
+                        bot.chat(`Could not find waypoint or coordinates for ${action.target}.`);
+                        process.send({ type: 'USER_CHAT', data: { username: "System", message: `Waypoint ${action.target} not found.`, environment: getEnvironmentContext() } });
+                        continue;
+                    }
+                }
+
                 // Per-waypoint timeout: 60s gives sprint-jumping bot time for 64 blocks
                 // even on complex terrain.  The outer action timeout is separate.
                 const wpTimeout = Math.max(timeoutMs, 60000);
 
-                if (action.y !== undefined) {
-                    bot.chat(`Moving to X:${Math.round(destX)}, Y:${action.y}, Z:${Math.round(destZ)}.`);
-                    await withTimeout(bot.pathfinder.goto(new goals.GoalNear(destX, action.y, destZ, 2)), wpTimeout, 'goto XYZ', () => bot.pathfinder.setGoal(null));
+                if (destY !== undefined) {
+                    bot.chat(`Moving to X:${Math.round(destX)}, Y:${destY}, Z:${Math.round(destZ)}.`);
+                    await withTimeout(bot.pathfinder.goto(new goals.GoalNear(destX, destY, destZ, 2)), wpTimeout, 'goto XYZ', () => bot.pathfinder.setGoal(null));
                 } else {
                     const dx0 = destX - bot.entity.position.x, dz0 = destZ - bot.entity.position.z;
                     const total = Math.sqrt(dx0 * dx0 + dz0 * dz0);
@@ -1352,8 +1527,31 @@ async function processActionQueue() {
                         // Stuck detection: require at least 3 blocks progress per waypoint.
                         // The old threshold (1 block) triggered false positives on terrain
                         // where the bot made partial progress each attempt.
-                        if (rem >= lastRem - 3) { if (++stuck >= 5) { bot.chat('Cannot make progress.'); break; } }
-                        else stuck = 0;
+                        if (rem >= lastRem - 3) {
+                            if (++stuck >= 5) {
+                                bot.chat('I am stuck. Recalculating an alternate route...');
+                                // Goal 1: If stuck, temporarily flag 5 block radius as unbreakable to force A* new route
+                                const stuckPos = bot.entity.position.floored();
+                                for (let dx = -5; dx <= 5; dx++) {
+                                    for (let dy = -5; dy <= 5; dy++) {
+                                        for (let dz = -5; dz <= 5; dz++) {
+                                            const b = bot.blockAt(stuckPos.offset(dx, dy, dz));
+                                            if (b && !movements.blocksCantBreak.has(b.type)) {
+                                                movements.blocksCantBreak.add(b.type);
+                                                // We also mark it as toAvoid to make A* heavily penalize paths near it
+                                                movements.blocksToAvoid.add(b.type);
+                                            }
+                                        }
+                                    }
+                                }
+                                bot.pathfinder.setMovements(movements);
+                                stuck = 0;
+                                // We don't break out immediately, we let the loop try again with the new restrictions
+                                continue;
+                            }
+                        } else {
+                            stuck = 0;
+                        }
                         lastRem = rem;
 
                         let wpX = destX, wpZ = destZ;
@@ -1884,9 +2082,16 @@ async function processActionQueue() {
                         const dist = bot.entity.position.distanceTo(target.position);
                         if (dist > 3.5) {
                             bot.pathfinder.setGoal(new goals.GoalFollow(target, 2), true);
+                            bot.deactivateItem(); // Stop blocking to move faster
                         } else {
                             bot.pathfinder.setGoal(null);
                             bot.attack(target);
+
+                            // If we have a shield, block right after attacking
+                            const offHand = bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')];
+                            if (offHand && offHand.name === 'shield') {
+                                bot.activateItem(true);
+                            }
                         }
                         await new Promise(r => setTimeout(r, 600)); // ~attack cooldown
                     }
@@ -1894,8 +2099,19 @@ async function processActionQueue() {
                     if (!target.isValid) {
                         killed++;
                         bot.pathfinder.setGoal(null);
+                        bot.deactivateItem();
+
                         // Short pause to let drops appear
                         await new Promise(r => setTimeout(r, 800));
+
+                        // Pick up drops: find dropped items near the death position
+                        const deathPos = target.position;
+                        const droppedItems = Object.values(bot.entities).filter(e => e.type === 'object' && e.position.distanceTo(deathPos) < 5);
+                        for (const item of droppedItems) {
+                            try {
+                                await withTimeout(bot.pathfinder.goto(new goals.GoalNear(item.position.x, item.position.y, item.position.z, 1)), 3000, 'pickup combat drop', () => bot.pathfinder.setGoal(null));
+                            } catch (e) {}
+                        }
                     }
                 }
 
@@ -1909,8 +2125,8 @@ async function processActionQueue() {
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `Failed to kill ${action.target}.`, environment: getEnvironmentContext() } });
                 }
 
-            // ── sleep ─────────────────────────────────────────────────────────
-            } else if (action.action === 'sleep') {
+            // ── sleep / set_respawn ───────────────────────────────────────────
+            } else if (action.action === 'sleep' || action.action === 'set_respawn') {
                 const bedBlock = bot.findBlock({
                     matching: b => b && b.name.endsWith('_bed'),
                     maxDistance: 32
@@ -1921,10 +2137,17 @@ async function processActionQueue() {
                 } else {
                     await withTimeout(bot.pathfinder.goto(new goals.GoalNear(bedBlock.position.x, bedBlock.position.y, bedBlock.position.z, 2)), timeoutMs, 'goto bed', () => bot.pathfinder.setGoal(null));
                     try {
+                        // Even if it's day, attempting to sleep on a bed sets the respawn point in recent versions
                         await withTimeout(bot.sleep(bedBlock), timeoutMs, 'sleep');
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: 'Sleeping...', environment: getEnvironmentContext() } });
                     } catch (err) {
-                        process.send({ type: 'USER_CHAT', data: { username: "System", message: `Cannot sleep: ${err.message}`, environment: getEnvironmentContext() } });
+                        // Sleep fails if it's day, but the respawn point should still be set.
+                        if (err.message.includes('day') || err.message.includes('time')) {
+                            bot.chat('Respawn point set!');
+                            process.send({ type: 'USER_CHAT', data: { username: "System", message: 'Respawn point set (cannot sleep during day).', environment: getEnvironmentContext() } });
+                        } else {
+                            process.send({ type: 'USER_CHAT', data: { username: "System", message: `Cannot sleep: ${err.message}`, environment: getEnvironmentContext() } });
+                        }
                     }
                 }
 
@@ -2051,13 +2274,22 @@ async function processActionQueue() {
                     const currentDim = bot.game.dimension;
                     // Walk into the portal and wait for teleportation (up to 10s)
                     try {
+                        // Goal 6: Force the bot to walk into the portal block
+                        bot.lookAt(portalBlock.position.offset(0.5, 0.5, 0.5));
+                        bot.setControlState('forward', true);
+
                         await withTimeout(new Promise(resolve => {
                             const check = setInterval(() => {
-                                if (bot.game.dimension !== currentDim) { clearInterval(check); resolve(); }
+                                if (bot.game.dimension !== currentDim) {
+                                    clearInterval(check);
+                                    bot.setControlState('forward', false);
+                                    resolve();
+                                }
                             }, 500);
                         }), 10000, 'portal teleport');
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: `Entered portal. Now in ${bot.game.dimension}.`, environment: getEnvironmentContext() } });
                     } catch (e) {
+                        bot.setControlState('forward', false);
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: `Portal transit timeout: ${e.message}`, environment: getEnvironmentContext() } });
                     }
                 }

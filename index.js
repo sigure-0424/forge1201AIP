@@ -21,9 +21,13 @@ console.log(`Target Server: ${host}:${port}`);
 
 const manager = new AgentManager();
 
+// Goal 4: Disable commands in normal start
+const mode = process.env.MODE || 'normal';
+console.log(`[Main] Operating in ${mode} mode.`);
+
 // Start bot instances
 for (const name of botNames) {
-    manager.startBot(name, { host, port });
+    manager.startBot(name, { host, port, mode });
 }
 
 // Keep the process alive and listen for graceful shutdowns

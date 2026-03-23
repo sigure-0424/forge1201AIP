@@ -12,6 +12,10 @@ class AgentManager {
         this.chatQueue = new Map(); // Map of botId to array of queued messages
         this.llmCooldown = new Map(); // Map of botId to timestamp of next allowed LLM request
         this.awaitingCancellationChoice = new Map(); // Map of botId to boolean waiting for user cancellation confirm
+
+        // Goals 4, 9, 10, 11: Task modes execution tracking
+        this.botModes = new Map(); // Map of botId to 'normal' | 'full_auto' | 'auto_conditional' | 'task_mode'
+        this.botActionCounts = new Map(); // Map of botId to number of actions executed (for full auto to task mode switch)
     }
 
     startBot(botId, options) {
@@ -19,6 +23,15 @@ class AgentManager {
             this.restartingBots.delete(botId);
         }
         console.log(`[AgentManager] Starting bot process for ${botId}...`);
+
+        // Save the bot's mode for later use
+        if (options && options.mode) {
+            this.botModes.set(botId, options.mode);
+            this.botActionCounts.set(botId, 0); // reset count
+            console.log(`[AgentManager] Bot ${botId} initialized with mode: ${options.mode}`);
+        } else {
+            this.botModes.set(botId, 'normal');
+        }
 
         const botProcess = fork(path.join(__dirname, 'bot_actuator.js'), [], {
             env: { ...process.env, BOT_ID: botId, BOT_OPTIONS: JSON.stringify(options) }
@@ -55,6 +68,31 @@ class AgentManager {
         } else if (message.type === 'USER_CHAT') {
             const data = message.data;
             const isSystem = data.username === 'System';
+
+            // Allow modes to be toggled via chat (Goal 9)
+            if (!isSystem && data.message.toLowerCase().startsWith('mode:')) {
+                const newModeMatch = data.message.match(/mode:\s*([a-zA-Z_0-9]+)/i);
+                if (newModeMatch && newModeMatch[1]) {
+                    const mode = newModeMatch[1].toLowerCase();
+                    this.botModes.set(botId, mode);
+                    console.log(`[AgentManager] Bot ${botId} mode changed via chat to: ${mode}`);
+
+                    if (mode === 'task_mode') {
+                        this.executeTaskModeTasks(botId);
+                    }
+                    return; // Intercepted as an internal command, don't ping LLM
+                }
+            }
+
+            let currentMode = this.botModes.get(botId) || 'normal';
+
+            // Normal mode bypasses automatic LLM tasks (Goal 4) unless forced,
+            // but for safety, we'll allow normal chatting to work unless specified otherwise.
+            // If the user means normal node index.js should NOT run tasks, we check currentMode.
+            if (!isSystem && currentMode === 'normal') {
+                 console.log(`[AgentManager] Ignoring chat command in normal mode: "${data.message}"`);
+                 return; // Silently ignore to avoid doing tasks
+            }
 
             if (!isSystem) {
                 const isCancellationResponse = this.awaitingCancellationChoice.get(botId);
@@ -108,6 +146,38 @@ class AgentManager {
                     this.processNextQueueItem(botId);
                 }
             }
+        }
+    }
+
+    // Goal 10: Task mode execution logic
+    executeTaskModeTasks(botId) {
+        const fs = require('fs');
+        const path = require('path');
+        const tasksPath = path.join(process.cwd(), 'data', 'tasks.json');
+
+        if (!fs.existsSync(tasksPath)) {
+            console.error(`[AgentManager] tasks.json not found at ${tasksPath}`);
+            const botProcess = this.bots.get(botId);
+            if (botProcess) {
+                botProcess.send({ type: 'EXECUTE_ACTION', action: [{ action: "chat", message: "Task Mode error: tasks.json not found." }] });
+            }
+            return;
+        }
+
+        try {
+            const data = fs.readFileSync(tasksPath, 'utf8');
+            const tasks = JSON.parse(data);
+            if (Array.isArray(tasks) && tasks.length > 0) {
+                console.log(`[AgentManager] Dispatching ${tasks.length} tasks for Task Mode.`);
+                const botProcess = this.bots.get(botId);
+                if (botProcess) {
+                    botProcess.send({ type: 'EXECUTE_ACTION', action: tasks });
+                }
+            } else {
+                console.log(`[AgentManager] tasks.json is empty or not an array.`);
+            }
+        } catch(e) {
+            console.error(`[AgentManager] Error parsing tasks.json: ${e.message}`);
         }
     }
 
@@ -223,6 +293,7 @@ Current Environment: ${JSON.stringify(data.environment)}
 [{"action": "stop"}]                                                              -- halts all current actions
 [{"action": "goto", "x": 10, "z": 20, "timeout": 60}]                           -- any distance, auto-waypoints
 [{"action": "goto", "x": 10, "y": 64, "z": 20}]
+[{"action": "goto", "target": "WaypointName"}]                                  -- travel to journeymap waypoint by name
 [{"action": "collect", "target": "oak_log", "quantity": 64, "timeout": 120}]
 [{"action": "give", "target": "player_name", "item": "oak_log", "quantity": 64}]
 [{"action": "equip", "target": "diamond_pickaxe"}]
@@ -302,6 +373,28 @@ ELDER GUARDIAN: brew(water_breathing) + brew(night_vision) → explore for ocean
             // so it can clear its current goals if 'stop' is part of a chained command.
             if (sanitizedActions.length > 0) {
                  botProcess.send({ type: 'EXECUTE_ACTION', action: sanitizedActions });
+            }
+        }
+
+        // Goals 10 & 11: Action tracking for Full Auto transition to Task Mode
+        if (this.botModes.get(botId) === 'full_auto') {
+            let count = (this.botActionCounts.get(botId) || 0) + sanitizedActions.length;
+            this.botActionCounts.set(botId, count);
+            console.log(`[AgentManager] Bot ${botId} (Full Auto) action count: ${count}`);
+
+            if (count >= 20) {
+                console.log(`[AgentManager] Bot ${botId} reached action limit in Full Auto. Switching to Task Mode.`);
+                botProcess.send({ type: 'EXECUTE_ACTION', action: [{ action: "chat", message: "Action limit reached. Switching to Task Mode." }] });
+                this.botModes.set(botId, 'task_mode');
+
+                // Clear active requests to make way for task mode
+                this.activeLlmRequests.delete(botId);
+                this.chatQueue.set(botId, []);
+
+                setTimeout(() => {
+                    this.executeTaskModeTasks(botId);
+                }, 2000);
+                return;
             }
         }
 
