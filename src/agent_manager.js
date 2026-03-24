@@ -35,6 +35,7 @@ class AgentManager {
         this.chatQueue = new Map(); // Map of botId to array of queued messages
         this.llmCooldown = new Map(); // Map of botId to timestamp of next allowed LLM request
         this.awaitingCancellationChoice = new Map(); // Map of botId to boolean waiting for user cancellation confirm
+        this.awaitingRecoveryChoice = new Map(); // Map of botId to boolean waiting for recovery consent
 
         // Goals 4, 9, 10, 11: Task modes execution tracking
         this.botModes = new Map(); // Map of botId to 'normal' | 'full_auto' | 'auto_conditional' | 'task_mode'
@@ -131,6 +132,7 @@ class AgentManager {
 
             if (!isSystem) {
                 const isCancellationResponse = this.awaitingCancellationChoice.get(botId);
+                const isRecoveryResponse = this.awaitingRecoveryChoice.get(botId);
                 const queue = this.chatQueue.get(botId) || [];
 
                 if (isCancellationResponse) {
@@ -147,6 +149,69 @@ class AgentManager {
                     } else {
                         console.log(`[AgentManager] User declined cancellation for ${botId}.`);
                         // Keep the queue as is, just return.
+                        return;
+                    }
+                }
+
+                if (isRecoveryResponse) {
+                    const msgLow = data.message.toLowerCase().trim();
+                    if (msgLow.startsWith('y')) {
+                        this.awaitingRecoveryChoice.set(botId, false);
+                        console.log(`[AgentManager] User confirmed recovery for ${botId}.`);
+                        const botProcess = this.bots.get(botId);
+                        if (botProcess) {
+                            // Find the latest pending death record
+                            try {
+                                const fs = require('fs');
+                                const path = require('path');
+                                const deathsPath = path.join(process.cwd(), 'data', 'deaths.json');
+                                if (fs.existsSync(deathsPath)) {
+                                    const deaths = JSON.parse(fs.readFileSync(deathsPath, 'utf8'));
+                                    let latestPending = null;
+                                    for (let i = deaths.length - 1; i >= 0; i--) {
+                                        if (deaths[i].status === 'pending') {
+                                            latestPending = deaths[i];
+                                            break;
+                                        }
+                                    }
+                                    if (latestPending) {
+                                        safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: [{ action: 'recover_gravestone', target: latestPending }] });
+                                    }
+                                }
+                            } catch (e) {
+                                console.error(`[AgentManager] Error reading deaths.json: ${e.message}`);
+                            }
+                        }
+                        return; // Done
+                    } else if (msgLow.startsWith('n')) {
+                        this.awaitingRecoveryChoice.set(botId, false);
+                        console.log(`[AgentManager] User declined recovery for ${botId}.`);
+                        // Mark latest pending as cancelled
+                        try {
+                            const fs = require('fs');
+                            const path = require('path');
+                            const deathsPath = path.join(process.cwd(), 'data', 'deaths.json');
+                            if (fs.existsSync(deathsPath)) {
+                                const deaths = JSON.parse(fs.readFileSync(deathsPath, 'utf8'));
+                                for (let i = deaths.length - 1; i >= 0; i--) {
+                                    if (deaths[i].status === 'pending') {
+                                        deaths[i].status = 'cancelled';
+                                        break;
+                                    }
+                                }
+                                fs.writeFileSync(deathsPath, JSON.stringify(deaths, null, 2));
+                            }
+                        } catch (e) {
+                            console.error(`[AgentManager] Error updating deaths.json: ${e.message}`);
+                        }
+                        const botProcess = this.bots.get(botId);
+                        if (botProcess) {
+                            safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: [{ action: "chat", message: "[System] Recovery cancelled." }] });
+                        }
+                        return; // Done
+                    } else {
+                        // Unrelated chatter, ignore and keep waiting for y/n
+                        console.log(`[AgentManager] Ignoring unrelated chat during recovery prompt: ${msgLow}`);
                         return;
                     }
                 }
@@ -169,6 +234,11 @@ class AgentManager {
                 this.processNextQueueItem(botId);
             } else {
                 // System messages from the bot actuator
+                if (data.message.includes('Do you want me to recover my items?')) {
+                    this.awaitingRecoveryChoice.set(botId, true);
+                    return; // Don't feed this to the LLM
+                }
+
                 const isSuccess = data.message.includes('Successfully') || data.message.includes('Explored') || data.message.includes('Entered portal') || data.message.includes('Reached destination');
                 const isFailure = data.message.includes('Failed') || data.message.includes('Cannot') || data.message.includes('No ');
 
@@ -445,6 +515,7 @@ Current Environment: ${JSON.stringify(data.environment)}${taskContext}
 *CRITICAL*: A task is only complete when the outcome is confirmed (item in inventory, entity dead, structure reached).
 *CRITICAL*: Do NOT mark a task complete just because an action ran — verify the result matches the task description.
 *CRITICAL*: If a task is confirmed complete, the system advances automatically. Do NOT repeat completed tasks.
+[{"action": "set_tasks", "tasks": [{"description": "step 1"}, {"description": "step 2"}]}]   -- Create sequential tasks to solve an abstract user request like "kill the ender dragon". When using this, the bot will automatically switch to TASK MODE and execute them sequentially.
 
 ━━━ BOSS DEFEAT SEQUENCES (use multi-action arrays) ━━━
 WITHER: collect soul_sand(4) + kill wither_skeleton(many) for skulls → place_pattern(wither) → kill(wither,timeout:300)
@@ -496,6 +567,34 @@ BLAZE (fire resistance): brew(fire_resistance) → navigate_portal(nether) → g
 
         const botProcess = this.bots.get(botId);
         if (botProcess) {
+            // Issue 8: Check for set_tasks to handle abstract task decomposition
+            const setTasksAction = sanitizedActions.find(a => a.action === 'set_tasks');
+            if (setTasksAction && Array.isArray(setTasksAction.tasks)) {
+                console.log(`[AgentManager] Received set_tasks action with ${setTasksAction.tasks.length} tasks. Transitioning to Task Mode.`);
+                try {
+                    const fs = require('fs');
+                    const path = require('path');
+                    const tasksPath = path.join(process.cwd(), 'data', 'tasks.json');
+                    const formattedTasks = setTasksAction.tasks.map((t, index) => ({
+                        id: index + 1,
+                        status: 'pending',
+                        description: t.description || JSON.stringify(t)
+                    }));
+                    fs.writeFileSync(tasksPath, JSON.stringify(formattedTasks, null, 2));
+
+                    this.botModes.set(botId, 'task_mode');
+                    safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: [{ action: "chat", message: `[System] Breaking down task into ${formattedTasks.length} steps. Switching to Task Mode.` }] });
+
+                    this.chatQueue.set(botId, []);
+                    setTimeout(() => {
+                        this.executeTaskModeTasks(botId);
+                    }, 1000);
+                } catch (e) {
+                    console.error(`[AgentManager] Failed to write tasks.json: ${e.message}`);
+                }
+                return;
+            }
+
             // Send the full sanitized array, including 'stop', to the bot actuator
             // so it can clear its current goals if 'stop' is part of a chained command.
             if (sanitizedActions.length > 0) {

@@ -153,7 +153,7 @@ let _lastHealth = 20;
 // Instead, track the last known safe position on a 2s interval.
 let _lastSafePos = null;
 let _lastSafeDim = 'overworld';
-const LAST_DEATH_FILE = path.join(process.cwd(), 'data', 'last_death.json');
+const DEATHS_FILE = path.join(process.cwd(), 'data', 'deaths.json');
 
 // IPC readiness gate — prevents processing actions before login/spawn complete.
 // Actions arriving before bot is ready are buffered and flushed after spawn.
@@ -173,10 +173,12 @@ bot.on('spawn', async () => {
 
     movements = new Movements(bot, mcData);
     movements.canDig = true;
-    movements.allowSprinting = true;
+    // Issue 6: Prevent bot from falling off 1-block bridges when pathfinding
+    movements.allowSprinting = false;
     movements.liquidCost = 3;
     movements.allow1by1towers = true;
-    movements.maxDropDown = 4;
+    // Issue 7: Lower drop down height to reduce random fall damage
+    movements.maxDropDown = 3;
 
     // Use cheap vanilla blocks for scaffolding
     movements.scafoldingBlocks = [
@@ -190,11 +192,13 @@ bot.on('spawn', async () => {
     // If a block doesn't match these natural types, add it to blocksCantBreak.
     if (bot.registry.blocksArray) {
         for (const block of bot.registry.blocksArray) {
-            if (block.isUnknownModBlock) {
+            const name = block.name.toLowerCase();
+            const isGrave = name.includes('grave') || name.includes('tomb') || name.includes('crave');
+
+            if (block.isUnknownModBlock && !isGrave) {
                 movements.blocksCantBreak.add(block.id);
             } else {
-                const name = block.name.toLowerCase();
-                const isNaturalTerrain = name.includes('dirt') || name.includes('stone') ||
+                const isNaturalTerrain = isGrave || name.includes('dirt') || name.includes('stone') ||
                                          name.includes('grass') || name.includes('sand') ||
                                          name.includes('gravel') || name.includes('clay') ||
                                          name.includes('netherrack') || name.includes('end_stone') ||
@@ -231,7 +235,8 @@ bot.on('spawn', async () => {
     }
 
     bot.pathfinder.setMovements(movements);
-    bot.pathfinder.thinkTimeout = 8000;
+    // Issue 6: Increase think timeout to give A* more time to find bridge connections
+    bot.pathfinder.thinkTimeout = 15000;
     // tickTimeout: ms of A* work per game tick.
     // 10 ms matches the original working configuration (commit 00fe7ea).
     bot.pathfinder.tickTimeout = 10;
@@ -272,16 +277,20 @@ bot.on('spawn', async () => {
             const deathPos = _lastSafePos || (bot.entity?.position?.clone());
             const deathDim = _lastSafeDim || bot.game?.dimension || 'overworld';
             if (deathPos && deathPos.y > -60) {
-                bot.chat('I died! Attempting to retrieve my GraveStone...');
+                // Issue 3 & 12: Differentiate system chat and ask for permission instead of auto-queuing.
+                bot.chat('[System Error] I died! Do you want me to recover my items? (yes/no)');
                 console.log(`[Actuator] Bot died. Last safe pos: ${JSON.stringify({x:Math.round(deathPos.x),y:Math.round(deathPos.y),z:Math.round(deathPos.z)}) } dim:${deathDim}`);
-                // Persist to file so recovery works even after process restart
-                const deathRecord = { x: deathPos.x, y: deathPos.y, z: deathPos.z, dimension: deathDim, time: new Date().toISOString() };
-                fs.writeFile(LAST_DEATH_FILE, JSON.stringify(deathRecord, null, 2), () => {});
-                // Queue recovery action on next spawn cycle
-                actionQueue.unshift({
-                    action: 'recover_gravestone',
-                    target: deathRecord
-                });
+
+                // Persist to file so recovery works even after process restart. Issue 1 & 2: Use sequential array.
+                const deathRecord = { x: deathPos.x, y: deathPos.y, z: deathPos.z, dimension: deathDim, time: new Date().toISOString(), status: 'pending' };
+                let deaths = [];
+                try {
+                    if (fs.existsSync(DEATHS_FILE)) {
+                        deaths = JSON.parse(fs.readFileSync(DEATHS_FILE, 'utf8'));
+                    }
+                } catch (e) {}
+                deaths.push(deathRecord);
+                fs.writeFile(DEATHS_FILE, JSON.stringify(deaths, null, 2), () => {});
             }
         });
 
@@ -335,6 +344,25 @@ bot.on('spawn', async () => {
             const mining = bot.pathfinder.isMining();
             const inWater = bot.entity.isInWater;
             const onGround = bot.entity.onGround;
+
+            // SWIMMING_OVERRIDE_START
+            // Issue 9: Improve swimming speed and straight-line movement.
+            // If the bot is moving via the pathfinder and is in water, force it to sprint and jump
+            // to simulate swimming rather than bouncing vertically at the surface.
+            if (moving && inWater) {
+                bot.setControlState('sprint', true);
+                bot.setControlState('jump', true);
+
+                // If there's a specific path node, ensure we look and move straight towards it
+                if (bot.pathfinder.goal && bot.pathfinder.goal.hasChanged && typeof bot.pathfinder.goal.hasChanged === 'function') {
+                     // Just keep forward true, looking logic is handled by pathfinder but sprinting helps speed.
+                     bot.setControlState('forward', true);
+                }
+            } else if (!moving && inWater && bot.getControlState('jump')) {
+                // If we stopped moving, stop jumping so we don't bob infinitely
+                bot.setControlState('jump', false);
+            }
+            // SWIMMING_OVERRIDE_END
 
             // Diagnostic: log movement state every 100 ticks (~5 seconds)
             if (_moveDiagTick % 100 === 0 && bot.entity) {
@@ -419,7 +447,7 @@ bot.on('spawn', async () => {
                     const ckey = `${cpos.x},${cpos.y},${cpos.z}`;
                     if (!_lootedChests.has(ckey)) {
                         console.log(`[Actuator] Found initial equipment chest at ${cpos}. Fetching gear...`);
-                        bot.chat(`I see an equipment chest! Gearing up...`);
+                        bot.chat(`[System] I see an equipment chest! Gearing up...`);
                         _lootedChests.add(ckey);
                         // Queue an immediate task to go open it and loot
                         actionQueue.unshift({
@@ -434,7 +462,7 @@ bot.on('spawn', async () => {
     } catch(e) {}
 
     // ── Mark bot ready EARLY so test harness can start, then escape water in background ──
-    bot.chat('Forge AI Player Ready.');
+    bot.chat('[System] Forge AI Player Ready.');
     _botReady = true;
     console.log('[Actuator] Bot ready. Flushing pending IPC actions:', _pendingIpcActions.length);
     for (const pending of _pendingIpcActions) {
@@ -466,7 +494,12 @@ bot.on('spawn', async () => {
                 let m = plain.match(/X[\s:]+(-?\d+)[^\d-]*Y[\s:]+(-?\d+)[^\d-]*Z[\s:]+(-?\d+)/i);
                 if (!m) m = plain.match(/(-?\d+)[,\s]+(-?\d+)[,\s]+(-?\d+)/);
 
-                if (m) return { item, plain: rawName.replace(/§[0-9a-fk-or]/gi, '').trim(), coords: { x: +m[1], y: +m[2], z: +m[3] } };
+                if (m) {
+                    const y = +m[2];
+                    if (y >= -64 && y <= 320) {
+                        return { item, plain: rawName.replace(/§[0-9a-fk-or]/gi, '').trim(), coords: { x: +m[1], y: y, z: +m[3] } };
+                    }
+                }
                 if (isMarker) return { item, plain: rawName.replace(/§[0-9a-fk-or]/gi, '').trim(), coords: null };
             }
         } catch (e) {}
@@ -476,43 +509,8 @@ bot.on('spawn', async () => {
     setTimeout(() => {
         if (actionQueue.some(a => a.action === 'recover_gravestone')) return;
 
-        // Priority 1: death marker item in inventory → recovery definitely incomplete
-        const markerResult = findDeathMarkerItem();
-        if (markerResult) {
-            let recoverPos = markerResult.coords
-                ? { ...markerResult.coords, dimension: _lastSafeDim || 'overworld' }
-                : null;
-            // If no coords from item, fall back to last_death.json coords (no time/retry limit)
-            if (!recoverPos) {
-                try {
-                    if (fs.existsSync(LAST_DEATH_FILE)) {
-                        const data = JSON.parse(fs.readFileSync(LAST_DEATH_FILE, 'utf8'));
-                        recoverPos = { x: data.x, y: data.y, z: data.z, dimension: data.dimension || _lastSafeDim || 'overworld' };
-                    }
-                } catch (e) {}
-            }
-            if (recoverPos) {
-                console.log(`[Actuator] Death marker "${markerResult.plain}" in inventory → recovery incomplete. Navigating to ${JSON.stringify(recoverPos)}`);
-                bot.chat(`Recovery incomplete. Returning to grave...`);
-                actionQueue.unshift({ action: 'recover_gravestone', target: recoverPos });
-                processActionQueue();
-                return;
-            }
-        }
-
-        // Priority 2: last_death.json (process restart, no marker in inventory yet)
-        try {
-            if (fs.existsSync(LAST_DEATH_FILE)) {
-                const data = JSON.parse(fs.readFileSync(LAST_DEATH_FILE, 'utf8'));
-                const minsAgo = (Date.now() - new Date(data.time || 0).getTime()) / 60000;
-                if (minsAgo < 30) {
-                    console.log(`[Actuator] Restoring recover_gravestone from last_death.json (${minsAgo.toFixed(1)} min ago)`);
-                    fs.writeFileSync(LAST_DEATH_FILE, JSON.stringify(data, null, 2));
-                    actionQueue.unshift({ action: 'recover_gravestone', target: data });
-                    processActionQueue();
-                }
-            }
-        } catch (e) {}
+        // Issue 3: We no longer auto-queue recovery.
+        // We wait for the player to respond to the "[System] I died! Do you want me to recover my items? (yes/no)" prompt.
     }, 3000);
 
     // Issue 4: Auto-equip best gear when idle (runs every 15s).
@@ -541,7 +539,7 @@ bot.on('spawn', async () => {
                 const isMarker = below && below.name === 'smooth_stone';
                 if (isMarker) {
                     console.log(`[Actuator] Idle: found equipment chest at ${cpos}. Auto-looting.`);
-                    bot.chat('I see an equipment chest nearby. Gearing up...');
+                    bot.chat('[System] I see an equipment chest nearby. Gearing up...');
                     _lootedChests.add(key);
                     actionQueue.unshift({ action: 'loot_chest_special', target: cpos });
                     processActionQueue();
@@ -693,139 +691,7 @@ bot.on('spawn', async () => {
         }
     }
 
-    // Legacy water escape (kept for backward compat — handles the case where bot is in actual water after above failed)
-    if (!bot.entity.onGround) {
-        const waterBelow = bot.blockAt(bot.entity.position.offset(0, -1, 0));
-        const blockAtFeet = bot.blockAt(bot.entity.position);
-        const inWaterZone = bot.entity.isInWater ||
-            (blockAtFeet && (blockAtFeet.name === 'water' || blockAtFeet.name === 'flowing_water')) ||
-            (waterBelow && (waterBelow.name === 'water' || waterBelow.name === 'flowing_water') &&
-             !(blockAtFeet && blockAtFeet.boundingBox === 'block'));
-        if (inWaterZone) {
-            console.log('[Actuator] Spawned in water. Attempting escape...');
-            const nearbyPlayers = Object.values(bot.players).filter(p => p.username !== bot.username);
-            let tpTarget = nearbyPlayers.length > 0 ? nearbyPlayers[0].username : null;
-            let escaped = false;
-
-            if (DEBUG && tpTarget) {
-                const prePos = bot.entity.position.clone();
-                bot.chat(`/tp ${bot.username} ${tpTarget}`);
-                console.log(`[Actuator] DEBUG: Sent /tp ${bot.username} ${tpTarget}. Waiting...`);
-                await new Promise(resolve => setTimeout(resolve, 3000));
-                const dist = bot.entity.position.distanceTo(prePos);
-                if (dist > 5) {
-                    console.log(`[Actuator] Teleport successful! Moved ${dist.toFixed(1)} blocks.`);
-                    const stillInWater = bot.entity.isInWater ||
-                        (bot.blockAt(bot.entity.position)?.name?.includes('water')) ||
-                        (bot.blockAt(bot.entity.position.offset(0, -1, 0))?.name?.includes('water'));
-                    if (!stillInWater) {
-                        escaped = true;
-                    } else {
-                        console.log(`[Actuator] Still in water near player. Scanning for dry ground...`);
-                        const dryBlocks = bot.findBlocks({
-                            matching: b => b && b.boundingBox === 'block' &&
-                                !b.name.includes('water') && !b.name.includes('lava') &&
-                                b.name !== 'air',
-                            maxDistance: 32,
-                            count: 50
-                        });
-                        const standable = dryBlocks.find(pos => {
-                            const above = bot.blockAt(pos.offset(0, 1, 0));
-                            const above2 = bot.blockAt(pos.offset(0, 2, 0));
-                            return above && above.boundingBox === 'empty' &&
-                                   above2 && above2.boundingBox === 'empty';
-                        });
-                        if (standable) {
-                            bot.chat(`/tp ${bot.username} ${standable.x + 0.5} ${standable.y + 1} ${standable.z + 0.5}`);
-                            console.log(`[Actuator] DEBUG: /tp to dry ground at (${standable.x}, ${standable.y + 1}, ${standable.z})...`);
-                            await new Promise(resolve => setTimeout(resolve, 2000));
-                            // Log blocks at new position to confirm solid ground
-                            if (process.env.DEBUG === 'true') {
-                                try {
-                                    const np = bot.entity.position.floored();
-                                    for (let dy = -2; dy <= 1; dy++) {
-                                        const b2 = bot.blockAt(np.offset(0, dy, 0));
-                                        console.log(`[GroundDiag] Y=${np.y + dy}: name=${b2?.name} type=${b2?.type} bb=${b2?.boundingBox}`);
-                                    }
-                                } catch (e) {}
-                            }
-                            console.log(`[Actuator] Now at (${bot.entity.position.x.toFixed(1)}, ${bot.entity.position.y.toFixed(1)}, ${bot.entity.position.z.toFixed(1)}) onGround=${bot.entity.onGround}`);
-                            escaped = true;
-                        } else {
-                            console.log(`[Actuator] No dry ground found within 32 blocks of player. Trying pathfinder...`);
-                            escaped = false;
-                        }
-                    }
-                } else {
-                    console.log(`[Actuator] /tp failed (moved ${dist.toFixed(1)} blocks). Bot may not have op. Trying pathfinder...`);
-                }
-            }
-
-            if (!escaped) {
-                // Pathfinder fallback: find shore blocks above seabed
-                const surfaceY = Math.floor(bot.entity.position.y) - 2;
-                let landTarget = null;
-                for (let r = 16; r <= 128 && !landTarget; r += 16) {
-                    const candidates = bot.findBlocks({
-                        matching: b => b && b.boundingBox === 'block' &&
-                            !b.name.includes('water') && !b.name.includes('lava') &&
-                            b.name !== 'air',
-                        maxDistance: r,
-                        count: 50
-                    });
-                    const shoreCandidates = candidates.filter(c => c.y >= surfaceY);
-                    if (shoreCandidates.length > 0) {
-                        shoreCandidates.sort((a, b) => {
-                            const da = (a.x - bot.entity.position.x) ** 2 + (a.z - bot.entity.position.z) ** 2;
-                            const db = (b.x - bot.entity.position.x) ** 2 + (b.z - bot.entity.position.z) ** 2;
-                            return da - db;
-                        });
-                        landTarget = shoreCandidates[0];
-                    }
-                }
-                if (landTarget) {
-                    console.log(`[Actuator] Land at (${landTarget.x}, ${landTarget.y}, ${landTarget.z}). Swimming...`);
-                    bot.chat('Swimming to land...');
-                    try {
-                        await withTimeout(
-                            bot.pathfinder.goto(new goals.GoalNear(landTarget.x, landTarget.y + 1, landTarget.z, 2)),
-                            60000, 'water escape',
-                            () => bot.pathfinder.setGoal(null)
-                        );
-                        console.log(`[Actuator] Reached land.`);
-                        escaped = true;
-                    } catch (e) {
-                        console.log(`[Actuator] Pathfinder swim failed: ${e.message}`);
-                    }
-                }
-            }
-
-            if (!escaped && nearbyPlayers.length > 0) {
-                // Ask player for help as last resort
-                bot.chat(`I'm stuck in water and can't move. Please use: /tp ${bot.username} ${tpTarget || 'YourName'}`);
-                console.log('[Actuator] Requested player teleport assistance.');
-                // Wait up to 60s for someone to tp us
-                const waitStart = Date.now();
-                const prePos2 = bot.entity.position.clone();
-                await new Promise(resolve => {
-                    const check = setInterval(() => {
-                        const dist = bot.entity.position.distanceTo(prePos2);
-                        if (dist > 5 || bot.entity.onGround || Date.now() - waitStart > 60000) {
-                            clearInterval(check);
-                            if (dist > 5 || bot.entity.onGround) {
-                                console.log(`[Actuator] Teleported by player! Now at (${bot.entity.position.x.toFixed(1)}, ${bot.entity.position.y.toFixed(1)}, ${bot.entity.position.z.toFixed(1)})`);
-                            } else {
-                                console.log('[Actuator] No teleport received. Bot remains in water.');
-                            }
-                            resolve();
-                        }
-                    }, 1000);
-                });
-            } else if (!escaped) {
-                console.log('[Actuator] No players nearby. Bot stuck in open water.');
-            }
-        }
-    }
+    // Legacy water escape block removed for cleanup
 
     })().catch(e => console.log('[Actuator] Background water escape error:', e.message));
 });
@@ -1303,6 +1169,12 @@ function getBestFoodItem() {
 // FIX: Improved inferToolCategory — also detects log-type blocks for axe suggestion
 function inferToolCategory(block) {
     const name = block.name.toLowerCase();
+
+    // Issue 5: Ensure graves use pickaxes to break properly
+    if (name.includes('grave') || name.includes('tomb') || name.includes('crave')) {
+        return 'pickaxe';
+    }
+
     if (name.includes('log') || name.includes('_wood') || name.includes('plank') ||
         name.includes('fence') || name.includes('stem') || name.includes('hyphae') ||
         name.includes('chest') || name.includes('barrel') || name.includes('bookshelf') ||
@@ -1385,7 +1257,7 @@ async function ensureToolFor(block) {
     }
 
     console.log(`[Actuator] No ${toolCat} found for ${block.name}. Auto-crafting tool...`);
-    bot.chat(`Need a ${toolCat}. Crafting one...`);
+    bot.chat(`[System] Need a ${toolCat}. Crafting one...`);
 
     const countBy = (set) => bot.inventory.items().filter(i => set.has(i.name)).reduce((s, i) => s + i.count, 0);
 
@@ -1479,7 +1351,7 @@ async function ensureToolFor(block) {
                     await withTimeout(bot.pathfinder.goto(new goals.GoalNear(craftingTable.position.x, craftingTable.position.y, craftingTable.position.z, 1)), 15000, 'goto table (auto-tool)', () => bot.pathfinder.setGoal(null));
                     if (currentCancelToken.cancelled) return;
                     await bot.craft(toolR, 1, craftingTable);
-                    bot.chat(`Crafted a ${toolName}!`);
+                    bot.chat(`[System] Crafted a ${toolName}!`);
                 } catch (e) { console.log(`[Actuator] auto-tool craft ${toolName}: ${e.message}`); }
             }
         }
@@ -1574,7 +1446,7 @@ async function processActionQueue() {
                 const targetPos = action.target;
                 if (targetPos) {
                     try {
-                        bot.chat(`Heading to equipment chest...`);
+                        bot.chat(`[System] Heading to equipment chest...`);
                         await withTimeout(bot.pathfinder.goto(new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 2)), 30000, 'goto equipment chest', () => bot.pathfinder.setGoal(null));
                         const block = bot.blockAt(new Vec3(targetPos.x, targetPos.y, targetPos.z));
                         if (block && block.name === 'chest') {
@@ -1587,7 +1459,7 @@ async function processActionQueue() {
                                 } catch(e) {}
                             }
                             bot.closeWindow(chestWindow);
-                            bot.chat(`Geared up from the chest!`);
+                            bot.chat(`[System] Geared up from the chest!`);
                             await equipBestArmor();
                             await equipBestWeapon();
                         }
@@ -1606,7 +1478,7 @@ async function processActionQueue() {
                         const deathDim = targetPos.dimension || 'overworld';
                         const currentDim = bot.game?.dimension || 'overworld';
                         if (deathDim !== currentDim) {
-                            bot.chat(`I need to travel to ${deathDim} to recover my grave.`);
+                            bot.chat(`[System] I need to travel to ${deathDim} to recover my grave.`);
                             const portalTarget = (deathDim === 'the_nether' || deathDim === 'nether') ? 'nether' : 'end';
                             actionQueue.unshift(
                                 { action: 'navigate_portal', target: portalTarget },
@@ -1615,7 +1487,7 @@ async function processActionQueue() {
                             continue;
                         }
 
-                        bot.chat(`Navigating to death coordinates X:${Math.round(targetPos.x)} Y:${Math.round(targetPos.y)} Z:${Math.round(targetPos.z)}...`);
+                        bot.chat(`[System] Navigating to death coordinates X:${Math.round(targetPos.x)} Y:${Math.round(targetPos.y)} Z:${Math.round(targetPos.z)}...`);
                         await withTimeout(
                             bot.pathfinder.goto(new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 2)),
                             Math.max(timeoutMs, 90000), 'goto gravestone', () => bot.pathfinder.setGoal(null)
@@ -1639,7 +1511,7 @@ async function processActionQueue() {
                             if (graveIds.length > 0) {
                                 const graveBlocks = bot.findBlocks({ matching: graveIds, maxDistance: radius, count: 10 });
                                 if (graveBlocks.length > 0) {
-                                    bot.chat(`Found GraveStone at distance ${radius}. Moving to it...`);
+                                    bot.chat(`[System] Found GraveStone at distance ${radius}. Moving to it...`);
                                     const graveBlock = bot.blockAt(graveBlocks[0]);
                                     await withTimeout(
                                         bot.pathfinder.goto(new goals.GoalNear(graveBlock.position.x, graveBlock.position.y, graveBlock.position.z, 1)),
@@ -1648,30 +1520,84 @@ async function processActionQueue() {
                                     await equipBestTool(graveBlock);
                                     await bot.dig(graveBlock, true);
                                     await new Promise(r => setTimeout(r, 1500));
-                                    bot.chat(`Recovered items from GraveStone.`);
+                                    bot.chat(`[System] Recovered items from GraveStone.`);
                                     process.send({ type: 'USER_CHAT', data: { username: 'System', message: 'Successfully recovered GraveStone items.', environment: getEnvironmentContext() } });
                                     await equipBestArmor();
                                     await equipBestWeapon();
                                     recovered = true;
-                                    try { if (fs.existsSync(LAST_DEATH_FILE)) fs.unlinkSync(LAST_DEATH_FILE); } catch (_) {}
+
+                                    // Issue 2: Mark death as recovered
+                                    try {
+                                        if (fs.existsSync(DEATHS_FILE)) {
+                                            const deaths = JSON.parse(fs.readFileSync(DEATHS_FILE, 'utf8'));
+                                            // Find the specific death to mark as recovered. Since we are targeting targetPos, we can match time or just the latest pending.
+                                            let updated = false;
+                                            for (let i = deaths.length - 1; i >= 0; i--) {
+                                                if (deaths[i].status === 'pending' && deaths[i].x === targetPos.x && deaths[i].y === targetPos.y && deaths[i].z === targetPos.z) {
+                                                    deaths[i].status = 'recovered';
+                                                    updated = true;
+                                                    break;
+                                                }
+                                            }
+                                            // Fallback: just mark latest pending as recovered
+                                            if (!updated) {
+                                                for (let i = deaths.length - 1; i >= 0; i--) {
+                                                    if (deaths[i].status === 'pending') {
+                                                        deaths[i].status = 'recovered';
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            fs.writeFileSync(DEATHS_FILE, JSON.stringify(deaths, null, 2));
+                                        }
+                                    } catch (_) {}
+
                                     console.log('[Actuator] Recovery complete. Death marker should be gone.');
                                     break;
                                 }
                             }
                         }
                         if (!recovered) {
-                            bot.chat(`Could not find a GraveStone block within 32 blocks.`);
+                            bot.chat(`[System Error] Could not find a GraveStone block within 32 blocks.`);
                             process.send({ type: 'USER_CHAT', data: { username: 'System', message: 'GraveStone not found. Items may have despawned.', environment: getEnvironmentContext() } });
+
+                            // Issue 2: Mark as incomplete
+                            try {
+                                if (fs.existsSync(DEATHS_FILE)) {
+                                    const deaths = JSON.parse(fs.readFileSync(DEATHS_FILE, 'utf8'));
+                                    for (let i = deaths.length - 1; i >= 0; i--) {
+                                        if (deaths[i].status === 'pending' && deaths[i].x === targetPos.x && deaths[i].y === targetPos.y && deaths[i].z === targetPos.z) {
+                                            deaths[i].status = 'incomplete';
+                                            break;
+                                        }
+                                    }
+                                    fs.writeFileSync(DEATHS_FILE, JSON.stringify(deaths, null, 2));
+                                }
+                            } catch (_) {}
                         }
                     } catch (e) {
                         console.log(`[Actuator] Failed to recover grave: ${e.message}`);
-                        bot.chat(`Failed to reach GraveStone.`);
+                        bot.chat(`[System Error] Failed to reach GraveStone.`);
+
+                        // Issue 2: Mark as incomplete
+                        try {
+                            if (fs.existsSync(DEATHS_FILE)) {
+                                const deaths = JSON.parse(fs.readFileSync(DEATHS_FILE, 'utf8'));
+                                for (let i = deaths.length - 1; i >= 0; i--) {
+                                    if (deaths[i].status === 'pending' && deaths[i].x === targetPos.x && deaths[i].y === targetPos.y && deaths[i].z === targetPos.z) {
+                                        deaths[i].status = 'incomplete';
+                                        break;
+                                    }
+                                }
+                                fs.writeFileSync(DEATHS_FILE, JSON.stringify(deaths, null, 2));
+                            }
+                        } catch (_) {}
                     }
                 }
 
             // ── dump_chunks ───────────────────────────────────────────────────
             } else if (action.action === 'dump_chunks') {
-                bot.chat("Dumping loaded chunks to chunk_dump.json...");
+                bot.chat("[System] Dumping loaded chunks to chunk_dump.json...");
                 try {
                     const blocks = bot.findBlocks({
                         matching: (b) => b && b.name !== 'air' && b.name !== 'water' && b.name !== 'lava' && b.name !== 'cave_air',
@@ -1710,7 +1636,7 @@ async function processActionQueue() {
                 if (env.players_nearby && env.players_nearby.length > 0) message += ` Nearby: ${env.players_nearby.join(', ')}.`;
                 if (env.nearby_blocks && env.nearby_blocks.length > 0) message += ` Blocks: ${env.nearby_blocks.join(', ')}.`;
 
-                bot.chat(message);
+                bot.chat(`[System] ${message}`);
                 process.send({ type: 'USER_CHAT', data: { username: "System", message: message, environment: env } });
 
             // ── come (continuous follow via GoalFollow) ─────────────────────
@@ -1723,7 +1649,7 @@ async function processActionQueue() {
             } else if (action.action === 'come') {
                 const targetEntity = bot.players[action.target]?.entity;
                 if (targetEntity) {
-                    bot.chat(`Following ${action.target}!`);
+                    bot.chat(`[System] Following ${action.target}!`);
                     bot.pathfinder.setGoal(new goals.GoalFollow(targetEntity, 2), true);
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `Now following ${action.target}.`, environment: getEnvironmentContext() } });
 
@@ -1743,7 +1669,7 @@ async function processActionQueue() {
                             if (!t || !t.isValid) {
                                 clearInterval(check);
                                 bot.pathfinder.setGoal(null);
-                                bot.chat(`Lost sight of ${action.target}.`);
+                                bot.chat(`[System Error] Lost sight of ${action.target}.`);
                                 process.send({ type: 'USER_CHAT', data: { username: "System", message: `Lost sight of ${action.target}.`, environment: getEnvironmentContext() } });
                                 resolve();
                                 return;
@@ -1755,7 +1681,7 @@ async function processActionQueue() {
                         }, 1000);
                     });
                 } else {
-                    bot.chat(`I cannot see ${action.target}.`);
+                    bot.chat(`[System Error] I cannot see ${action.target}.`);
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `Failed to find ${action.target}.`, environment: getEnvironmentContext() } });
                 }
 
@@ -1777,12 +1703,12 @@ async function processActionQueue() {
                         destY = internalWP.y;
                         destZ = internalWP.z;
                         destDimension = internalWP.dimension || null;
-                        bot.chat(`Going to waypoint "${internalWP.name}" at X:${destX}, Y:${destY}, Z:${destZ}${destDimension ? ` (${destDimension})` : ''}`);
+                        bot.chat(`[System] Going to waypoint "${internalWP.name}" at X:${destX}, Y:${destY}, Z:${destZ}${destDimension ? ` (${destDimension})` : ''}`);
 
                     // 2. Check structure names → use /locate
                     } else if (STRUCTURE_NAMES[targetName]) {
                         const structureId = STRUCTURE_NAMES[targetName];
-                        bot.chat(`Locating ${action.target}...`);
+                        bot.chat(`[System] Locating ${action.target}...`);
                         bot.chat(`/locate structure minecraft:${structureId}`);
 
                         // Wait for the server response chat containing coordinates
@@ -1801,14 +1727,14 @@ async function processActionQueue() {
                         });
 
                         if (!locateResult) {
-                            bot.chat(`Could not locate ${action.target}.`);
+                            bot.chat(`[System Error] Could not locate ${action.target}.`);
                             process.send({ type: 'USER_CHAT', data: { username: "System", message: `Could not locate structure ${action.target}. Try /locate manually.`, environment: getEnvironmentContext() } });
                             continue;
                         }
                         destX = locateResult.x;
                         destZ = locateResult.z;
                         destY = undefined;
-                        bot.chat(`${action.target} found at X:${destX}, Z:${destZ}. Navigating...`);
+                        bot.chat(`[System] ${action.target} found at X:${destX}, Z:${destZ}. Navigating...`);
 
                     // 3. Fall back to JourneyMap waypoints
                     } else {
@@ -1824,14 +1750,14 @@ async function processActionQueue() {
                                         destY = data.y;
                                         destZ = data.z;
                                         foundWaypoint = true;
-                                        bot.chat(`Found JourneyMap waypoint ${data.name} at X:${destX}, Y:${destY}, Z:${destZ}`);
+                                        bot.chat(`[System] Found JourneyMap waypoint ${data.name} at X:${destX}, Y:${destY}, Z:${destZ}`);
                                         break;
                                     }
                                 } catch(e) {}
                             }
                         }
                         if (!foundWaypoint) {
-                            bot.chat(`Could not find waypoint or coordinates for ${action.target}.`);
+                            bot.chat(`[System Error] Could not find waypoint or coordinates for ${action.target}.`);
                             process.send({ type: 'USER_CHAT', data: { username: "System", message: `Waypoint ${action.target} not found.`, environment: getEnvironmentContext() } });
                             continue;
                         }
@@ -1849,7 +1775,7 @@ async function processActionQueue() {
                     } else {
                         neededPortal = 'nether_portal'; // return from nether
                     }
-                    bot.chat(`Cross-dimension travel required. Searching for ${neededPortal}...`);
+                    bot.chat(`[System] Cross-dimension travel required. Searching for ${neededPortal}...`);
                     actionQueue.unshift(
                         { action: 'navigate_portal', target: neededPortal === 'nether_portal' ? 'nether' : 'end' },
                         { action: 'goto', x: destX, y: destY, z: destZ, dimension: destDimension }
@@ -1863,7 +1789,7 @@ async function processActionQueue() {
                 const wpTimeout = Math.max(timeoutMs, 120000);
 
                 if (destY !== undefined) {
-                    bot.chat(`Moving to X:${Math.round(destX)}, Y:${destY}, Z:${Math.round(destZ)}.`);
+                    bot.chat(`[System] Moving to X:${Math.round(destX)}, Y:${destY}, Z:${Math.round(destZ)}.`);
                     const curY = bot.entity.position.y;
                     const xzDist3 = Math.sqrt((destX - bot.entity.position.x) ** 2 + (destZ - bot.entity.position.z) ** 2);
 
@@ -1873,6 +1799,11 @@ async function processActionQueue() {
                     if (xzDist3 > 64) {
                         // Phase 1: navigate to XZ vicinity using step loop
                         let lr3 = xzDist3, sk3 = 0;
+                        // Issue 4: Discourage tunneling on long trips
+                        const savedCanDig = movements.canDig;
+                        movements.canDig = false;
+                        bot.pathfinder.setMovements(movements);
+
                         while (!currentCancelToken.cancelled) {
                             const cx3 = bot.entity.position.x, cz3 = bot.entity.position.z;
                             const rdx3 = destX - cx3, rdz3 = destZ - cz3;
@@ -1884,16 +1815,32 @@ async function processActionQueue() {
                                     await new Promise(r => setTimeout(r, 400));
                                     bot.setControlState('jump', false);
                                     sk3 = 0; lr3 = rem3;
+                                    // If stuck, briefly allow digging to escape
+                                    movements.canDig = true;
+                                    bot.pathfinder.setMovements(movements);
                                 }
-                            } else { sk3 = 0; }
+                            } else {
+                                sk3 = 0;
+                                if (movements.canDig !== false) {
+                                    movements.canDig = false;
+                                    bot.pathfinder.setMovements(movements);
+                                }
+                            }
                             lr3 = rem3;
                             const a3 = Math.atan2(rdz3, rdx3);
                             const wx3 = rem3 > WAYPOINT_STEP ? cx3 + WAYPOINT_STEP * Math.cos(a3) : destX;
                             const wz3 = rem3 > WAYPOINT_STEP ? cz3 + WAYPOINT_STEP * Math.sin(a3) : destZ;
                             try {
                                 await withTimeout(bot.pathfinder.goto(new goals.GoalXZ(wx3, wz3)), wpTimeout, 'goto XYZ step', () => bot.pathfinder.setGoal(null));
-                            } catch (e) { console.log(`[Actuator] XYZ step error: ${e.message}`); }
+                            } catch (e) {
+                                console.log(`[Actuator] XYZ step error: ${e.message}`);
+                                // Re-allow digging on fail to bypass obstacle
+                                movements.canDig = true;
+                                bot.pathfinder.setMovements(movements);
+                            }
                         }
+                        movements.canDig = savedCanDig;
+                        bot.pathfinder.setMovements(movements);
                         // Phase 2: final XYZ approach (with no-dig preference if going down)
                         if (!currentCancelToken.cancelled) {
                             if (destY < curY - 10 && movements) {
@@ -1924,23 +1871,45 @@ async function processActionQueue() {
                 } else {
                     const dx0 = destX - bot.entity.position.x, dz0 = destZ - bot.entity.position.z;
                     const total = Math.sqrt(dx0 * dx0 + dz0 * dz0);
-                    bot.chat(`Moving to X:${Math.round(destX)}, Z:${Math.round(destZ)}${total > WAYPOINT_STEP ? ` (~${Math.round(total)} blocks)` : ''}.`);
+                    bot.chat(`[System] Moving to X:${Math.round(destX)}, Z:${Math.round(destZ)}${total > WAYPOINT_STEP ? ` (~${Math.round(total)} blocks)` : ''}.`);
 
                     let lastRem = total, stuck = 0;
+
+                    // Issue 4: Discourage tunneling on long trips
+                    const savedCanDig = movements.canDig;
+                    if (total > 64) {
+                        movements.canDig = false;
+                        bot.pathfinder.setMovements(movements);
+                    }
+
                     while (!currentCancelToken.cancelled) {
                         const cx = bot.entity.position.x, cz = bot.entity.position.z;
                         const rdx = destX - cx, rdz = destZ - cz;
                         const rem = Math.sqrt(rdx * rdx + rdz * rdz);
                         if (rem <= 4) break;  // close enough (was 2, too tight for XZ-only goals)
+
+                        // If getting close, re-enable digging to ensure we can reach target
+                        if (rem <= 32 && movements.canDig === false) {
+                            movements.canDig = savedCanDig;
+                            bot.pathfinder.setMovements(movements);
+                        }
+
                         // Stuck detection: require at least 3 blocks progress per waypoint.
                         if (rem >= lastRem - 3) {
                             if (++stuck >= 5) {
                                 // Goal 1 fix: use a perpendicular escape instead of polluting
                                 // blocksCantBreak/blocksToAvoid (which causes permanent avoidance
                                 // of legitimate terrain types across the whole session).
-                                bot.chat('I am stuck. Trying escape maneuver...');
+                                bot.chat('[System] I am stuck. Trying escape maneuver...');
                                 stuck = 0;
                                 lastRem = rem;
+
+                                // Re-enable digging on getting stuck
+                                if (movements.canDig === false) {
+                                    movements.canDig = true;
+                                    bot.pathfinder.setMovements(movements);
+                                }
+
                                 // Jump to break free from single-block lip catches
                                 bot.setControlState('jump', true);
                                 await new Promise(r => setTimeout(r, 400));
@@ -1972,8 +1941,16 @@ async function processActionQueue() {
                             // progress.  Log it and let the stuck detector handle retries.
                             bot.clearControlStates();
                             console.log(`[Actuator] goto waypoint error: ${wpErr.message}`);
+
+                            if (movements.canDig === false) {
+                                movements.canDig = true;
+                                bot.pathfinder.setMovements(movements);
+                            }
                         }
                     }
+
+                    movements.canDig = savedCanDig;
+                    bot.pathfinder.setMovements(movements);
                 }
                 if (!currentCancelToken.cancelled) {
                     const finalDist = Math.sqrt(
@@ -1995,7 +1972,7 @@ async function processActionQueue() {
                     ? sourceSNames.map(n => bot.registry.blocksByName[n]?.id).filter(id => id !== undefined)
                     : (directBlockId !== undefined ? [directBlockId] : []);
 
-                if (searchIds.length === 0) { bot.chat(`I don't know what ${action.target} is.`); }
+                if (searchIds.length === 0) { bot.chat(`[System Error] I don't know what ${action.target} is.`); }
                 else {
                     const quantity = parseInt(action.quantity, 10) || 1;
                     let collected = 0;
@@ -2050,19 +2027,19 @@ async function processActionQueue() {
                                     const heldItem = bot.inventory.slots[bot.getEquipmentDestSlot('hand')];
                                     if (!heldItem || !firstBlock.harvestTools[heldItem.type]) {
                                         const toolCat = inferToolCategory(firstBlock);
-                                        bot.chat(`I need a ${toolCat} to collect ${action.target}.`);
+                                        bot.chat(`[System Error] I need a ${toolCat} to collect ${action.target}.`);
                                         // Give the LLM the full dependency chain so it can plan recovery.
                                         process.send({ type: 'USER_CHAT', data: { username: "System", message: `No ${toolCat} available to collect ${action.target}. Craft one: collect oak_log(2) → craft oak_planks → craft sticks → place crafting_table → craft wooden_${toolCat} → then retry collect ${action.target}.`, environment: getEnvironmentContext() } });
                                         break; // abort — outer pass loop
                                     }
                                 }
                             }
-                            bot.chat(`Collecting ${action.target}...`);
+                            bot.chat(`[System] Collecting ${action.target}...`);
                         } else if (pass.maxDistance === 64) {
-                            bot.chat(`Expanding search for more ${action.target}...`);
+                            bot.chat(`[System] Expanding search for more ${action.target}...`);
                         }
 
-                        bot.chat(`I am mining ${action.quantity || 1} ${action.target}...`);
+                        bot.chat(`[System] I am mining ${action.quantity || 1} ${action.target}...`);
 
                         for (const blockPos of fresh) {
                             if (currentCancelToken.cancelled || collected >= quantity) break;
@@ -2158,15 +2135,15 @@ async function processActionQueue() {
                     }
 
                     if (collected >= quantity) {
-                        bot.chat(`Completed mining ${action.target}. Processing next step...`);
+                        bot.chat(`[System] Completed mining ${action.target}. Processing next step...`);
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: `Successfully collected ${collected} ${action.target}.`, environment: getEnvironmentContext() } });
                     } else if (collected > 0) {
                         actionQueue = []; // Clear queue on partial success to re-evaluate
-                        bot.chat(`Completed mining ${collected} ${action.target}. Processing next step...`);
+                        bot.chat(`[System] Completed mining ${collected} ${action.target}. Processing next step...`);
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: `Partially collected ${collected}/${quantity} ${action.target}.`, environment: getEnvironmentContext() } });
                     } else {
                         actionQueue = []; // Clear queue on failure
-                        bot.chat(`Could not find any ${action.target} nearby.`);
+                        bot.chat(`[System Error] Could not find any ${action.target} nearby.`);
                         const undergroundHint = UNDERGROUND_BLOCKS.has(action.target)
                             ? ` This is an underground resource. You must mine down through stone layers to find it — issue a collect for "stone" first to dig a shaft, then retry.`
                             : '';
@@ -2180,18 +2157,18 @@ async function processActionQueue() {
                 const itemTargetName = action.item || action.target;
                 const itemId = bot.registry.itemsByName[itemTargetName]?.id || bot.registry.blocksByName[itemTargetName]?.id;
                 if (targetPlayer && itemId !== undefined) {
-                    bot.chat(`Giving ${action.quantity || 1} ${itemTargetName} to ${action.target}...`);
+                    bot.chat(`[System] Giving ${action.quantity || 1} ${itemTargetName} to ${action.target}...`);
                     await withTimeout(bot.pathfinder.goto(new goals.GoalNear(targetPlayer.position.x, targetPlayer.position.y, targetPlayer.position.z, 2)), timeoutMs, 'goto player for give', () => bot.pathfinder.setGoal(null));
                     await bot.lookAt(targetPlayer.position.offset(0, 1.6, 0));
                     await bot.toss(itemId, null, action.quantity || 1);
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `Successfully gave item to ${action.target}.`, environment: getEnvironmentContext() } });
                 } else if (!targetPlayer) {
                     actionQueue = []; // Clear queue on failure
-                    bot.chat(`I cannot see ${action.target}.`);
+                    bot.chat(`[System Error] I cannot see ${action.target}.`);
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `Cannot see ${action.target}.`, environment: getEnvironmentContext() } });
                 } else {
                     actionQueue = []; // Clear queue on failure
-                    bot.chat(`I don't know what item ${itemTargetName} is.`);
+                    bot.chat(`[System Error] I don't know what item ${itemTargetName} is.`);
                 }
 
             // ── craft ─────────────────────────────────────────────────────────
@@ -2224,7 +2201,7 @@ async function processActionQueue() {
 
                     if (missing.length > 0) {
                         actionQueue = []; // Clear queue on failure
-                        bot.chat(`Cannot craft ${action.target}: missing materials.`);
+                        bot.chat(`[System Error] Cannot craft ${action.target}: missing materials.`);
                         const missingStr = missing.map(m => `${m.quantity}x ${m.name}`).join(', ');
                         process.send({
                             type: 'USER_CHAT',
@@ -2239,7 +2216,7 @@ async function processActionQueue() {
 
                     const recipe = bot.recipesFor(itemId, null, 1, true)[0];
                     if (recipe) {
-                        bot.chat(`Crafting ${action.target}...`);
+                        bot.chat(`[System] Crafting ${action.target}...`);
 
                         // 2. Isolated Crafting Table Check
                         if (recipe.requiresTable) {
@@ -2252,11 +2229,11 @@ async function processActionQueue() {
                                     await withTimeout(bot.craft(recipe, quantity, ct), timeoutMs, 'craft at table');
                                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `Successfully crafted ${quantity} ${action.target}.`, environment: getEnvironmentContext() } });
                                 } catch (err) {
-                                    bot.chat(`Failed to craft ${action.target}.`);
+                                    bot.chat(`[System Error] Failed to craft ${action.target}.`);
                                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `Failed to craft: ${err.message}`, environment: getEnvironmentContext() } });
                                 }
                             } else {
-                                bot.chat(`Need a crafting table nearby for ${action.target}. Preparing one...`);
+                                bot.chat(`[System] Need a crafting table nearby for ${action.target}. Preparing one...`);
                                 // Determine the available log to craft with.
                                 const logs = bot.inventory.items().filter(i => i.name.endsWith('_log') || i.name.endsWith('_wood'));
                                 const bestLog = logs.length > 0 ? logs[0].name : "oak_log";
@@ -2281,18 +2258,18 @@ async function processActionQueue() {
                                 process.send({ type: 'USER_CHAT', data: { username: "System", message: `Successfully crafted ${quantity} ${action.target}.`, environment: getEnvironmentContext() } });
                             } catch (err) {
                                 actionQueue = []; // Clear queue on failure
-                                bot.chat(`Failed to craft ${action.target}.`);
+                                bot.chat(`[System Error] Failed to craft ${action.target}.`);
                                 process.send({ type: 'USER_CHAT', data: { username: "System", message: `Failed to craft: ${err.message}`, environment: getEnvironmentContext() } });
                             }
                         }
                     } else {
                         actionQueue = []; // Clear queue on failure
-                        bot.chat(`Cannot craft ${action.target}: recipe not found.`);
+                        bot.chat(`[System Error] Cannot craft ${action.target}: recipe not found.`);
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: `Cannot craft ${action.target}: recipe not found.`, environment: getEnvironmentContext() } });
                     }
                 } else {
                     actionQueue = []; // Clear queue on failure
-                    bot.chat(`I don't know what ${action.target} is.`);
+                    bot.chat(`[System Error] I don't know what ${action.target} is.`);
                 }
 
             // ── place ─────────────────────────────────────────────────────────
@@ -2307,17 +2284,17 @@ async function processActionQueue() {
                             process.send({ type: 'USER_CHAT', data: { username: "System", message: `Successfully placed ${action.target}.`, environment: getEnvironmentContext() } });
                         } catch (err) {
                             actionQueue = []; // Clear queue on failure
-                            bot.chat(`Failed to place ${action.target}.`);
+                            bot.chat(`[System Error] Failed to place ${action.target}.`);
                             process.send({ type: 'USER_CHAT', data: { username: "System", message: `Place failed: ${err.message}`, environment: getEnvironmentContext() } });
                         }
                     } else {
                         actionQueue = []; // Clear queue on failure
-                        bot.chat(`No ${action.target} in inventory.`);
+                        bot.chat(`[System Error] No ${action.target} in inventory.`);
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: `No ${action.target} in inventory.`, environment: getEnvironmentContext() } });
                     }
                 } else {
                     actionQueue = []; // Clear queue on failure
-                    bot.chat(`I don't know what ${action.target} is.`);
+                    bot.chat(`[System Error] I don't know what ${action.target} is.`);
                 }
 
             // ── equip ─────────────────────────────────────────────────────────
@@ -2330,7 +2307,7 @@ async function processActionQueue() {
                     if (item) {
                         try {
                             await bot.equip(item, 'hand');
-                            bot.chat(`Equipped ${action.target}.`);
+                            bot.chat(`[System] Equipped ${action.target}.`);
                             process.send({ type: 'USER_CHAT', data: { username: "System", message: `Equipped ${action.target}.`, environment: getEnvironmentContext() } });
                         } catch (err) {
                             actionQueue = []; // Clear queue on failure
@@ -2338,12 +2315,12 @@ async function processActionQueue() {
                         }
                     } else {
                         actionQueue = []; // Clear queue on failure
-                        bot.chat(`No ${action.target} to equip.`);
+                        bot.chat(`[System Error] No ${action.target} to equip.`);
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: `No ${action.target} in inventory.`, environment: getEnvironmentContext() } });
                     }
                 } else {
                     actionQueue = []; // Clear queue on failure
-                    bot.chat(`I don't know what ${action.target} is.`);
+                    bot.chat(`[System Error] I don't know what ${action.target} is.`);
                 }
 
             // ── equip_armor ───────────────────────────────────────────────────
@@ -2367,7 +2344,7 @@ async function processActionQueue() {
                     }
                 } else {
                     actionQueue = []; // Clear queue on failure
-                    bot.chat('No food in inventory.');
+                    bot.chat('[System Error] No food in inventory.');
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: 'No food available.', environment: getEnvironmentContext() } });
                 }
 
@@ -2378,7 +2355,7 @@ async function processActionQueue() {
                 const inputItem = bot.inventory.items().find(i => i.name === inputName);
 
                 if (!inputItem) {
-                    bot.chat(`No ${inputName} to smelt.`);
+                    bot.chat(`[System Error] No ${inputName} to smelt.`);
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `No ${inputName} in inventory.`, environment: getEnvironmentContext() } });
                 } else {
                     const furnaceBlockId = bot.registry.blocksByName['furnace']?.id;
@@ -2409,7 +2386,7 @@ async function processActionQueue() {
                     }
 
                     if (!furnaceBlock) {
-                        bot.chat('Cannot find or create a furnace.');
+                        bot.chat('[System Error] Cannot find or create a furnace.');
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: 'No furnace available.', environment: getEnvironmentContext() } });
                     } else {
                         await withTimeout(bot.pathfinder.goto(new goals.GoalNear(furnaceBlock.position.x, furnaceBlock.position.y, furnaceBlock.position.z, 1)), timeoutMs, 'goto furnace', () => bot.pathfinder.setGoal(null));
@@ -2424,7 +2401,7 @@ async function processActionQueue() {
                             const fresh = bot.inventory.items().find(i => i.name === inputName);
                             if (fresh) await furnace.putInput(fresh.type, null, Math.min(quantity, fresh.count));
 
-                            bot.chat(`Smelting ${quantity} ${inputName}...`);
+                            bot.chat(`[System] Smelting ${quantity} ${inputName}...`);
                             const waitMs = Math.min(quantity * 11000, timeoutMs - 5000);
                             const t0 = Date.now();
                             while (Date.now() - t0 < waitMs && !currentCancelToken.cancelled) {
@@ -2493,7 +2470,7 @@ async function processActionQueue() {
                     }
                 }
 
-                bot.chat(`Engaging ${action.target}...`);
+                bot.chat(`[System] Engaging ${action.target}...`);
 
                 // Bow charge state tracking (non-blocking)
                 let _bowChargeStart = 0;
@@ -2512,7 +2489,7 @@ async function processActionQueue() {
                     }
                     if (!target) {
                         if (killed === 0) {
-                            bot.chat(`Cannot find ${action.target}.`);
+                            bot.chat(`[System Error] Cannot find ${action.target}.`);
                             process.send({ type: 'USER_CHAT', data: { username: "System", message: `${action.target} not found.`, environment: getEnvironmentContext() } });
                         }
                         break;
@@ -2702,7 +2679,7 @@ async function processActionQueue() {
                     maxDistance: 32
                 });
                 if (!bedBlock) {
-                    bot.chat('No bed nearby.');
+                    bot.chat('[System Error] No bed nearby.');
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: 'No bed found within 32 blocks.', environment: getEnvironmentContext() } });
                 } else {
                     await withTimeout(bot.pathfinder.goto(new goals.GoalNear(bedBlock.position.x, bedBlock.position.y, bedBlock.position.z, 2)), timeoutMs, 'goto bed', () => bot.pathfinder.setGoal(null));
@@ -2713,7 +2690,7 @@ async function processActionQueue() {
                     } catch (err) {
                         // Sleep fails if it's day, but the respawn point should still be set.
                         if (err.message.includes('day') || err.message.includes('time')) {
-                            bot.chat('Respawn point set!');
+                            bot.chat('[System] Respawn point set!');
                             process.send({ type: 'USER_CHAT', data: { username: "System", message: 'Respawn point set (cannot sleep during day).', environment: getEnvironmentContext() } });
                         } else {
                             process.send({ type: 'USER_CHAT', data: { username: "System", message: `Cannot sleep: ${err.message}`, environment: getEnvironmentContext() } });
@@ -2727,13 +2704,13 @@ async function processActionQueue() {
                 const recipe = POTION_RECIPES[potionKey];
 
                 if (!recipe) {
-                    bot.chat(`Unknown potion type: ${potionKey}`);
+                    bot.chat(`[System Error] Unknown potion type: ${potionKey}`);
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `Unknown potion: ${potionKey}`, environment: getEnvironmentContext() } });
                 } else {
                     const standId = bot.registry.blocksByName['brewing_stand']?.id;
                     const stand = standId !== undefined ? bot.findBlock({ matching: standId, maxDistance: 32 }) : null;
                     if (!stand) {
-                        bot.chat('No brewing stand nearby.');
+                        bot.chat('[System Error] No brewing stand nearby.');
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: 'No brewing stand found.', environment: getEnvironmentContext() } });
                     } else {
                         await withTimeout(bot.pathfinder.goto(new goals.GoalNear(stand.position.x, stand.position.y, stand.position.z, 1)), timeoutMs, 'goto brewing stand', () => bot.pathfinder.setGoal(null));
@@ -2748,7 +2725,7 @@ async function processActionQueue() {
                             const ingredient = ingredientId !== undefined ? bot.inventory.items().find(i => i.type === ingredientId) : null;
                             if (ingredient) await brewingStand.putIngredient(ingredient.type, null, 1);
 
-                            bot.chat(`Brewing ${potionKey} potion...`);
+                            bot.chat(`[System] Brewing ${potionKey} potion...`);
                             // Wait for brewing to complete (~20 seconds)
                             await new Promise(r => setTimeout(r, Math.min(22000, timeoutMs - 3000)));
                             brewingStand.close();
@@ -2767,10 +2744,10 @@ async function processActionQueue() {
                 const targetItem = bot.inventory.items().find(i => i.name === action.target);
 
                 if (!tableBlock) {
-                    bot.chat('No enchanting table nearby.');
+                    bot.chat('[System Error] No enchanting table nearby.');
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: 'No enchanting table found.', environment: getEnvironmentContext() } });
                 } else if (!targetItem) {
-                    bot.chat(`No ${action.target} to enchant.`);
+                    bot.chat(`[System Error] No ${action.target} to enchant.`);
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `${action.target} not in inventory.`, environment: getEnvironmentContext() } });
                 } else {
                     await withTimeout(bot.pathfinder.goto(new goals.GoalNear(tableBlock.position.x, tableBlock.position.y, tableBlock.position.z, 1)), timeoutMs, 'goto enchanting table', () => bot.pathfinder.setGoal(null));
@@ -2802,7 +2779,7 @@ async function processActionQueue() {
                 const markers = STRUCTURE_MARKERS[action.target] || [];
                 let found = null, traveled = 0;
 
-                bot.chat(`Exploring ${action.direction || 'east'}${action.target ? ` for ${action.target}` : ''}...`);
+                bot.chat(`[System] Exploring ${action.direction || 'east'}${action.target ? ` for ${action.target}` : ''}...`);
 
                 while (traveled < maxDist && !currentCancelToken.cancelled && !found) {
                     const nx = bot.entity.position.x + dx * STEP;
@@ -2821,7 +2798,7 @@ async function processActionQueue() {
                 }
 
                 if (found) {
-                    bot.chat(`Found ${action.target}!`);
+                    bot.chat(`[System] Found ${action.target}!`);
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `Found ${action.target} at ${found.position}.`, environment: getEnvironmentContext() } });
                 } else if (!currentCancelToken.cancelled) {
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `Explored ${traveled} blocks. ${action.target ? `${action.target} not found.` : 'Done.'}`, environment: getEnvironmentContext() } });
@@ -2857,7 +2834,7 @@ async function processActionQueue() {
                         return (n.includes('portal') || n.includes('gate')) && n.includes(targetKey);
                     });
                     if (wp) {
-                        if (isConnected()) bot.chat(`Traveling to saved portal waypoint "${wp.name}"...`);
+                        if (isConnected()) bot.chat(`[System] Traveling to saved portal waypoint "${wp.name}"...`);
                         const wpDist = Math.sqrt((wp.x - bot.entity.position.x) ** 2 + (wp.z - bot.entity.position.z) ** 2);
                         const wpTimeout = Math.max(60000, wpDist * 600); // 600ms/block
                         // Segmented walk — no digging to avoid VeinMiner chain reactions
@@ -2902,7 +2879,7 @@ async function processActionQueue() {
                 // Grid spacing = 128 blocks (≈ server view distance). No artificial radius cap.
                 // Each move loads a fresh set of chunks; findPortalAll() searches every loaded block.
                 if (!portalBlock && isConnected() && !currentCancelToken.cancelled) {
-                    if (isConnected()) bot.chat(`No ${portalLabel} portal in loaded area. Starting exhaustive grid scan...`);
+                    if (isConnected()) bot.chat(`[System] No ${portalLabel} portal in loaded area. Starting exhaustive grid scan...`);
                     const origin = bot.entity.position.clone();
                     const GRID_STEP = 128;
                     let layer = 1;
@@ -2977,12 +2954,12 @@ async function processActionQueue() {
                 }
 
                 if (!portalBlock) {
-                    if (isConnected()) bot.chat(`${portalLabel} portal not found.`);
+                    if (isConnected()) bot.chat(`[System Error] ${portalLabel} portal not found.`);
                 } else {
                     if (!isConnected()) {
                         console.log(`[Actuator] navigate_portal: portal found but socket dead, aborting.`);
                     } else {
-                    bot.chat(`Found ${portalLabel} portal. Entering...`);
+                    bot.chat(`[System] Found ${portalLabel} portal. Entering...`);
                     try {
                         await withTimeout(bot.pathfinder.goto(new goals.GoalNear(portalBlock.position.x, portalBlock.position.y, portalBlock.position.z, 1)), Math.max(timeoutMs, 60000), 'goto portal', () => bot.pathfinder.setGoal(null));
                     } catch (e) { /* close enough */ }
@@ -3031,7 +3008,7 @@ async function processActionQueue() {
 
                         const eyeId = bot.registry.itemsByName['ender_eye']?.id;
                         const eye = eyeId !== undefined ? bot.inventory.items().find(i => i.name === 'ender_eye') : null;
-                        if (!eye) { bot.chat('Out of Eyes of Ender.'); break; }
+                        if (!eye) { bot.chat('[System Error] Out of Eyes of Ender.'); break; }
 
                         await bot.equip(eye, 'hand');
                         await withTimeout(bot.pathfinder.goto(new goals.GoalNear(framePos.x, framePos.y, framePos.z, 3)), 15000, 'goto portal frame', () => bot.pathfinder.setGoal(null));
@@ -3049,7 +3026,7 @@ async function processActionQueue() {
                 const pattern = PLACE_PATTERNS[patternName];
 
                 if (!pattern) {
-                    bot.chat(`Unknown pattern: ${patternName}`);
+                    bot.chat(`[System Error] Unknown pattern: ${patternName}`);
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `Unknown pattern: ${patternName}`, environment: getEnvironmentContext() } });
                 } else {
                     // Place the pattern in front of and at the feet of the bot
@@ -3069,7 +3046,7 @@ async function processActionQueue() {
 
                         const blockItemId = bot.registry.itemsByName[entry.name]?.id ?? bot.registry.blocksByName[entry.name]?.id;
                         const blockItem = bot.inventory.items().find(i => i.name === entry.name || i.type === blockItemId);
-                        if (!blockItem) { bot.chat(`Missing ${entry.name}.`); missing++; continue; }
+                        if (!blockItem) { bot.chat(`[System Error] Missing ${entry.name}.`); missing++; continue; }
 
                         await bot.equip(blockItem, 'hand');
                         await withTimeout(bot.pathfinder.goto(new goals.GoalNear(tx, ty, tz, 3)), 15000, `goto pattern pos`, () => bot.pathfinder.setGoal(null)).catch(() => {});
@@ -3109,7 +3086,7 @@ async function processActionQueue() {
                         waypoints.push(entry);
                     }
                     saveWaypoints(waypoints);
-                    bot.chat(`Waypoint "${wpName}" saved at X:${entry.x}, Y:${entry.y}, Z:${entry.z} (${dim}).`);
+                    bot.chat(`[System] Waypoint "${wpName}" saved at X:${entry.x}, Y:${entry.y}, Z:${entry.z} (${dim}).`);
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `Waypoint "${wpName}" saved at X:${entry.x}, Y:${entry.y}, Z:${entry.z} (${dim}).`, environment: getEnvironmentContext() } });
                 }
 
@@ -3203,7 +3180,7 @@ async function processActionQueue() {
 
         } catch (err) {
             console.error(`[Actuator] Action execution failed: ${err.message}`);
-            if (bot._client.chat) bot.chat("An error occurred.");
+            if (bot._client.chat) bot.chat("[System Error] An error occurred.");
             bot.pathfinder.setGoal(null);
             process.send({ type: 'USER_CHAT', data: { username: "System", message: `Action failed: ${err.message}`, environment: getEnvironmentContext() } });
         }
