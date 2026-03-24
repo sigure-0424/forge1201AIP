@@ -2810,10 +2810,10 @@ async function processActionQueue() {
                 const isConnected = () => bot._client?.socket?.writable === true;
 
                 // Scan all currently loaded chunks for the portal block.
-                // maxDistance 10000 covers every loaded chunk since the server only sends
+                // maxDistance 256 covers every loaded chunk since the server only sends
                 // chunks within view distance (~160 blocks); this cannot return false positives.
                 const findPortalAll = () => portalBlockId !== undefined
-                    ? bot.findBlock({ matching: portalBlockId, maxDistance: 10000 })
+                    ? bot.findBlock({ matching: portalBlockId, maxDistance: 256 })
                     : null;
 
                 let portalBlock = findPortalAll();
