@@ -442,11 +442,13 @@ bot.on('spawn', async () => {
             for (const item of bot.inventory.items()) {
                 const rawName = item.nbt?.value?.display?.value?.Name?.value || item.customName || item.displayName || item.name || '';
                 const plain = rawName.replace(/§[0-9a-fk-or]/gi, '').trim();
-                if (DEATH_MARKER_PATTERNS.some(p => p.test(plain))) return { item, plain, coords: null };
-                // Also detect coordinate-embedded items
+
+                let isMarker = DEATH_MARKER_PATTERNS.some(p => p.test(plain));
                 let m = plain.match(/X[\s:]+(-?\d+)[^\d-]*Y[\s:]+(-?\d+)[^\d-]*Z[\s:]+(-?\d+)/i);
                 if (!m) m = plain.match(/(-?\d+)[,\s]+(-?\d+)[,\s]+(-?\d+)/);
+
                 if (m) return { item, plain, coords: { x: +m[1], y: +m[2], z: +m[3] } };
+                if (isMarker) return { item, plain, coords: null };
             }
         } catch (e) {}
         return null;
@@ -1730,7 +1732,7 @@ async function processActionQueue() {
                 let destX = action.x;
                 let destY = action.y;
                 let destZ = action.z;
-                let destDimension = null;
+                let destDimension = action.dimension || null;
 
                 if (action.target && typeof action.target === 'string') {
                     const targetName = action.target.toLowerCase();
@@ -1817,7 +1819,7 @@ async function processActionQueue() {
                     bot.chat(`Cross-dimension travel required. Searching for ${neededPortal}...`);
                     actionQueue.unshift(
                         { action: 'navigate_portal', target: neededPortal === 'nether_portal' ? 'nether' : 'end' },
-                        { action: 'goto', x: destX, y: destY, z: destZ }
+                        { action: 'goto', x: destX, y: destY, z: destZ, dimension: destDimension }
                     );
                     continue;
                 }
@@ -2816,12 +2818,12 @@ async function processActionQueue() {
 
                 let portalBlock = findPortalAll();
 
-                // Step via a known portal waypoint (name must contain 'portal')
+                // Step via a known portal waypoint (name must contain 'portal' or 'gate')
                 if (!portalBlock && !currentCancelToken.cancelled) {
                     const targetKey = action.target || 'nether';
                     const wp = loadWaypoints().find(w => {
                         const n = w.name.toLowerCase();
-                        return n.includes('portal') && n.includes(targetKey);
+                        return (n.includes('portal') || n.includes('gate')) && n.includes(targetKey);
                     });
                     if (wp) {
                         if (isConnected()) bot.chat(`Traveling to saved portal waypoint "${wp.name}"...`);
