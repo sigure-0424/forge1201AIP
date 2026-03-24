@@ -12,5 +12,12 @@
     "y": 67,
     "z": -186,
     "dimension": "the_nether"
+  },
+  {
+    "name": "nether_portal",
+    "x": -617,
+    "y": 67,
+    "z": -450,
+    "dimension": "the_nether"
   }
 ]
