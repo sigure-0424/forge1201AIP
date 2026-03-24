@@ -1,0 +1,16 @@
+[
+  {
+    "name": "nether_gate",
+    "x": -612,
+    "y": 68,
+    "z": -448,
+    "dimension": "overworld"
+  },
+  {
+    "name": "NetherFortressGate",
+    "x": -563,
+    "y": 67,
+    "z": -186,
+    "dimension": "the_nether"
+  }
+]

@@ -231,7 +231,7 @@ bot.on('spawn', async () => {
     }
 
     bot.pathfinder.setMovements(movements);
-    bot.pathfinder.thinkTimeout = 5000;
+    bot.pathfinder.thinkTimeout = 8000;
     // tickTimeout: ms of A* work per game tick.
     // 10 ms matches the original working configuration (commit 00fe7ea).
     bot.pathfinder.tickTimeout = 10;
@@ -430,45 +430,69 @@ bot.on('spawn', async () => {
     _pendingIpcActions = [];
     if (actionQueue.length > 0) processActionQueue();
 
-    // Issue 1: After respawn, check inventory for death-marker items (gravestone mods often
-    // place a "Death Point" compass or similar) and also try data/last_death.json if no
-    // recover_gravestone is already queued.
-    setTimeout(() => {
-        if (actionQueue.some(a => a.action === 'recover_gravestone')) return; // already queued
-
-        // Scan inventory for items whose display name contains coordinates.
+    // Death Recovery: check for gravestone mod death-marker item in inventory.
+    // If present, recovery is incomplete regardless of how many restarts have occurred.
+    // Recovery is only complete when the marker item is gone after collecting items.
+    // Fallback: last_death.json used only when no marker item exists (no retry cap when marker present).
+    const DEATH_MARKER_PATTERNS = [
+        /grave/i, /death/i, /soul/i, /tomb/i, /obituary/i, /rip\b/i, /died/i, /pouch/i, /backpack.*death/i
+    ];
+    const findDeathMarkerItem = () => {
         try {
             for (const item of bot.inventory.items()) {
-                const rawName = item.nbt?.value?.display?.value?.Name?.value || item.customName || item.displayName || '';
+                const rawName = item.nbt?.value?.display?.value?.Name?.value || item.customName || item.displayName || item.name || '';
                 const plain = rawName.replace(/§[0-9a-fk-or]/gi, '').trim();
-                // Match "X: N Y: N Z: N" format (common in Grave mods)
+                if (DEATH_MARKER_PATTERNS.some(p => p.test(plain))) return { item, plain, coords: null };
+                // Also detect coordinate-embedded items
                 let m = plain.match(/X[\s:]+(-?\d+)[^\d-]*Y[\s:]+(-?\d+)[^\d-]*Z[\s:]+(-?\d+)/i);
-                // Match three consecutive integers separated by spaces or commas
                 if (!m) m = plain.match(/(-?\d+)[,\s]+(-?\d+)[,\s]+(-?\d+)/);
-                if (m) {
-                    const recoverPos = { x: +m[1], y: +m[2], z: +m[3], dimension: _lastSafeDim || 'overworld' };
-                    console.log(`[Actuator] Death marker item found: "${plain}" → ${JSON.stringify(recoverPos)}`);
-                    bot.chat(`Found death marker! Navigating to X:${recoverPos.x} Y:${recoverPos.y} Z:${recoverPos.z}...`);
-                    actionQueue.unshift({ action: 'recover_gravestone', target: recoverPos });
-                    processActionQueue();
-                    return;
-                }
+                if (m) return { item, plain, coords: { x: +m[1], y: +m[2], z: +m[3] } };
             }
         } catch (e) {}
+        return null;
+    };
 
-        // Fallback: check last_death.json (useful after process restart)
+    setTimeout(() => {
+        if (actionQueue.some(a => a.action === 'recover_gravestone')) return;
+
+        // Priority 1: death marker item in inventory → recovery definitely incomplete
+        const markerResult = findDeathMarkerItem();
+        if (markerResult) {
+            let recoverPos = markerResult.coords
+                ? { ...markerResult.coords, dimension: _lastSafeDim || 'overworld' }
+                : null;
+            // If no coords from item, fall back to last_death.json coords (no time/retry limit)
+            if (!recoverPos) {
+                try {
+                    if (fs.existsSync(LAST_DEATH_FILE)) {
+                        const data = JSON.parse(fs.readFileSync(LAST_DEATH_FILE, 'utf8'));
+                        recoverPos = { x: data.x, y: data.y, z: data.z, dimension: data.dimension || _lastSafeDim || 'overworld' };
+                    }
+                } catch (e) {}
+            }
+            if (recoverPos) {
+                console.log(`[Actuator] Death marker "${markerResult.plain}" in inventory → recovery incomplete. Navigating to ${JSON.stringify(recoverPos)}`);
+                bot.chat(`Recovery incomplete. Returning to grave...`);
+                actionQueue.unshift({ action: 'recover_gravestone', target: recoverPos });
+                processActionQueue();
+                return;
+            }
+        }
+
+        // Priority 2: last_death.json (process restart, no marker in inventory yet)
         try {
             if (fs.existsSync(LAST_DEATH_FILE)) {
                 const data = JSON.parse(fs.readFileSync(LAST_DEATH_FILE, 'utf8'));
                 const minsAgo = (Date.now() - new Date(data.time || 0).getTime()) / 60000;
-                if (minsAgo < 15) {
+                if (minsAgo < 30) {
                     console.log(`[Actuator] Restoring recover_gravestone from last_death.json (${minsAgo.toFixed(1)} min ago)`);
+                    fs.writeFileSync(LAST_DEATH_FILE, JSON.stringify(data, null, 2));
                     actionQueue.unshift({ action: 'recover_gravestone', target: data });
                     processActionQueue();
                 }
             }
         } catch (e) {}
-    }, 3000); // wait 3s for inventory to populate after respawn
+    }, 3000);
 
     // Issue 4: Auto-equip best gear when idle (runs every 15s).
     // Ensures any armor/weapons acquired via crafting, looting, or trading get equipped.
@@ -1594,6 +1618,8 @@ async function processActionQueue() {
                                     await equipBestArmor();
                                     await equipBestWeapon();
                                     recovered = true;
+                                    try { if (fs.existsSync(LAST_DEATH_FILE)) fs.unlinkSync(LAST_DEATH_FILE); } catch (_) {}
+                                    console.log('[Actuator] Recovery complete. Death marker should be gone.');
                                     break;
                                 }
                             }
@@ -1911,10 +1937,11 @@ async function processActionQueue() {
                             wpZ = cz + WAYPOINT_STEP * Math.sin(a);
                         }
                         try {
-                            await withTimeout(bot.pathfinder.goto(new goals.GoalXZ(wpX, wpZ)), wpTimeout, 'goto XZ waypoint', () => bot.pathfinder.setGoal(null));
+                            await withTimeout(bot.pathfinder.goto(new goals.GoalXZ(wpX, wpZ)), wpTimeout, 'goto XZ waypoint', () => { try { bot.pathfinder.setGoal(null); bot.clearControlStates(); } catch (_) {} });
                         } catch (wpErr) {
                             // Per-waypoint failure is NOT fatal — the bot might still make
                             // progress.  Log it and let the stuck detector handle retries.
+                            bot.clearControlStates();
                             console.log(`[Actuator] goto waypoint error: ${wpErr.message}`);
                         }
                     }
@@ -2419,6 +2446,24 @@ async function processActionQueue() {
                     }
                 }
 
+                // Pre-combat: use fire resistance potion if fighting in nether or vs fire mobs
+                const FIRE_MOBS = new Set(['blaze', 'ghast', 'magma_cube', 'wither_skeleton', 'wither']);
+                if (FIRE_MOBS.has((action.target || '').toLowerCase())) {
+                    const fireResPotion = bot.inventory.items().find(i =>
+                        i.name && (i.name.includes('fire_resistance') || i.name.includes('fireresistance')));
+                    if (fireResPotion) {
+                        try { await bot.equip(fireResPotion, 'hand'); await bot.consume(); } catch (e) {}
+                        await equipBestWeapon();
+                    }
+                    // Prefer snowballs vs blazes (3 hearts per throw, no fire risk)
+                    if ((action.target || '').toLowerCase() === 'blaze') {
+                        const snowball = bot.inventory.items().find(i => i.name === 'snowball');
+                        if (snowball) {
+                            try { await bot.equip(snowball, 'hand'); } catch (e) {}
+                        }
+                    }
+                }
+
                 bot.chat(`Engaging ${action.target}...`);
 
                 // Bow charge state tracking (non-blocking)
@@ -2451,12 +2496,17 @@ async function processActionQueue() {
                     while (target.isValid && !currentCancelToken.cancelled) {
                         const now = Date.now();
 
-                        // ── Health check ──────────────────────────────────────────────
-                        if (bot.health < 8) {
+                        // ── Health check: eat or flee ─────────────────────────────────
+                        if (bot.health < 10) {
                             const food = getBestFoodItem();
                             if (food) {
                                 bot.pathfinder.setGoal(null);
                                 if (_bowCharging) { bot.deactivateItem(); _bowCharging = false; }
+                                // Back away while eating
+                                const retreatAngle = Math.atan2(botPos.z - target.position.z, botPos.x - target.position.x);
+                                const rx = botPos.x + 8 * Math.cos(retreatAngle);
+                                const rz = botPos.z + 8 * Math.sin(retreatAngle);
+                                bot.pathfinder.goto(new goals.GoalXZ(rx, rz)).catch(() => {});
                                 try {
                                     await bot.equip(food, 'hand');
                                     await bot.consume();
@@ -2524,7 +2574,12 @@ async function processActionQueue() {
                                 await bot.lookAt(targetEye);
                                 const currentBow = bot.heldItem?.name === 'bow';
                                 const currentArrows = bot.inventory.items().some(i => i.name === 'arrow');
-                                if (currentBow && currentArrows && !_bowCharging) {
+                                // Prefer snowballs vs blazes (instant throw, 3 hearts damage)
+                                const heldSnowball = bot.heldItem?.name === 'snowball';
+                                const hasSnowball = bot.inventory.items().some(i => i.name === 'snowball');
+                                if (heldSnowball && !_bowCharging) {
+                                    try { await bot.activateItem(); } catch (e) {}
+                                } else if (currentBow && currentArrows && !_bowCharging) {
                                     bot.activateItem();
                                     _bowChargeStart = now;
                                     _bowCharging = true;
@@ -2535,33 +2590,51 @@ async function processActionQueue() {
                                 }
                             }
                         } else {
-                            // Melee combat — close in and strafe to dodge
-                            if (dist > 3) {
+                            // ── Melee combat: kite-attack pattern ───────────────────────
+                            // Low-health retreat: back off to regenerate, then re-engage
+                            if (bot.health < 6) {
+                                bot.pathfinder.setGoal(null);
+                                if (_bowCharging) { bot.deactivateItem(); _bowCharging = false; }
+                                // Flee directly away from mob
+                                const fleeAngle = Math.atan2(botPos.z - target.position.z, botPos.x - target.position.x);
+                                const fx = botPos.x + 12 * Math.cos(fleeAngle);
+                                const fz = botPos.z + 12 * Math.sin(fleeAngle);
+                                bot.pathfinder.goto(new goals.GoalXZ(fx, fz)).catch(() => {});
+                                await new Promise(r => setTimeout(r, 600));
+                            } else if (dist > 3.5) {
+                                // Close the gap — use GoalFollow so bot keeps up if mob moves
                                 bot.pathfinder.setGoal(new goals.GoalFollow(target, 2), true);
                             } else {
                                 bot.pathfinder.setGoal(null);
                                 await bot.lookAt(target.position.offset(0, (target.height || 1.8) * 0.5, 0));
+
+                                // Jump-attack: jump before swinging for 150% damage critical hit
+                                if (bot.entity.onGround) {
+                                    bot.setControlState('jump', true);
+                                    await new Promise(r => setTimeout(r, 80));
+                                    bot.setControlState('jump', false);
+                                }
                                 bot.attack(target);
 
-                                // Issue 4: Shield up immediately after attack
-                                const offSlot = bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')];
-                                if (offSlot?.name === 'shield') {
+                                // Shield up immediately after attack
+                                const offSlotM = bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')];
+                                if (offSlotM?.name === 'shield') {
                                     bot.activateItem(true);
-                                    _shieldUntil = now + 600;
+                                    _shieldUntil = now + 700;
                                 }
 
-                                // Issue 4: Strafe after attacking to avoid next hit
-                                if (now - _lastStrafe > 500) {
+                                // Strafe away after attacking — perpendicular escape
+                                if (now - _lastStrafe > 400) {
                                     _strafeSign *= -1;
                                     _lastStrafe = now;
                                 }
                                 const strafeYaw = bot.entity.yaw + (_strafeSign * Math.PI / 2);
-                                const stx = botPos.x + 2 * Math.sin(strafeYaw);
-                                const stz = botPos.z + 2 * Math.cos(strafeYaw);
+                                const stx = botPos.x + 3 * Math.sin(strafeYaw);
+                                const stz = botPos.z + 3 * Math.cos(strafeYaw);
                                 bot.pathfinder.goto(new goals.GoalXZ(stx, stz)).catch(() => {});
                             }
                         }
-                        await new Promise(r => setTimeout(r, 200)); // shorter tick = more reactive
+                        await new Promise(r => setTimeout(r, 150)); // 150ms tick for faster reaction
                     }
 
                     if (!target.isValid) {
@@ -2731,67 +2804,113 @@ async function processActionQueue() {
                 const portalBlockId = bot.registry.blocksByName[portalName]?.id;
                 const portalLabel = action.target === 'end' ? 'End' : 'Nether';
 
-                // Helper: scan for portal block up to given radius
-                const findPortal = (radius) => portalBlockId !== undefined
-                    ? bot.findBlock({ matching: portalBlockId, maxDistance: radius })
+                // isConnected: guard before any network write
+                const isConnected = () => bot._client?.socket?.writable === true;
+
+                // Scan all currently loaded chunks for the portal block.
+                // maxDistance 10000 covers every loaded chunk since the server only sends
+                // chunks within view distance (~160 blocks); this cannot return false positives.
+                const findPortalAll = () => portalBlockId !== undefined
+                    ? bot.findBlock({ matching: portalBlockId, maxDistance: 10000 })
                     : null;
 
-                let portalBlock = findPortal(64);
+                let portalBlock = findPortalAll();
 
-                // Issue 2a: check internal waypoints for a known portal position
-                if (!portalBlock) {
-                    const portalKeywords = [action.target || 'nether', 'portal'];
+                // Step via a known portal waypoint (name must contain 'portal')
+                if (!portalBlock && !currentCancelToken.cancelled) {
+                    const targetKey = action.target || 'nether';
                     const wp = loadWaypoints().find(w => {
                         const n = w.name.toLowerCase();
-                        return portalKeywords.some(k => n.includes(k));
+                        return n.includes('portal') && n.includes(targetKey);
                     });
                     if (wp) {
-                        bot.chat(`Traveling to waypoint "${wp.name}" to reach portal...`);
-                        try {
-                            await withTimeout(
-                                bot.pathfinder.goto(new goals.GoalNear(wp.x, wp.y, wp.z, 4)),
-                                120000, 'goto portal waypoint', () => bot.pathfinder.setGoal(null)
-                            );
-                        } catch (e) { console.log(`[Actuator] Portal waypoint travel: ${e.message}`); }
-                        portalBlock = findPortal(32);
-                    }
-                }
-
-                // Issue 2b: expand search radius gradually
-                if (!portalBlock) {
-                    for (const radius of [128, 256]) {
-                        portalBlock = findPortal(radius);
-                        if (portalBlock) {
-                            console.log(`[Actuator] Found ${portalLabel} portal at radius ${radius}.`);
-                            break;
-                        }
-                    }
-                }
-
-                // Issue 2c: explore in cardinal directions to find portal (max 512 blocks)
-                if (!portalBlock && !currentCancelToken.cancelled) {
-                    bot.chat(`No ${portalLabel} portal nearby. Exploring to find one...`);
-                    const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
-                    outer: for (const [edx, edz] of dirs) {
-                        for (let dist = 64; dist <= 512; dist += 64) {
-                            if (currentCancelToken.cancelled) break outer;
-                            const ex = bot.entity.position.x + edx * dist;
-                            const ez = bot.entity.position.z + edz * dist;
+                        if (isConnected()) bot.chat(`Traveling to saved portal waypoint "${wp.name}"...`);
+                        const wpDist = Math.sqrt((wp.x - bot.entity.position.x) ** 2 + (wp.z - bot.entity.position.z) ** 2);
+                        const wpTimeout = Math.max(60000, wpDist * 600); // 600ms/block
+                        // Segmented walk — same approach as goto action
+                        const STEP = 64;
+                        let wpReached = false;
+                        while (!currentCancelToken.cancelled && !wpReached) {
+                            if (!isConnected()) break;
+                            const cx = bot.entity.position.x, cz = bot.entity.position.z;
+                            const rdx = wp.x - cx, rdz = wp.z - cz;
+                            const rem = Math.sqrt(rdx * rdx + rdz * rdz);
+                            if (rem <= 5) { wpReached = true; break; }
+                            const a = Math.atan2(rdz, rdx);
+                            const stepX = rem > STEP ? cx + STEP * Math.cos(a) : wp.x;
+                            const stepZ = rem > STEP ? cz + STEP * Math.sin(a) : wp.z;
+                            const stepTimeout = Math.max(30000, Math.min(rem, STEP) * 600);
                             try {
                                 await withTimeout(
-                                    bot.pathfinder.goto(new goals.GoalXZ(ex, ez)),
-                                    60000, 'portal explore step', () => bot.pathfinder.setGoal(null)
+                                    bot.pathfinder.goto(new goals.GoalXZ(stepX, stepZ)),
+                                    stepTimeout, 'portal waypoint step',
+                                    () => { try { bot.pathfinder.setGoal(null); bot.clearControlStates(); } catch (_) {} }
                                 );
-                            } catch (e) { /* terrain obstacle, continue */ }
-                            portalBlock = findPortal(48);
-                            if (portalBlock) break outer;
+                            } catch (e) {
+                                console.log(`[Actuator] Portal waypoint step: ${e.message}`);
+                                bot.clearControlStates();
+                            }
+                            portalBlock = findPortalAll();
+                            if (portalBlock) break;
+                        }
+                        if (!portalBlock) portalBlock = findPortalAll();
+                    }
+                }
+
+                // Exhaustive expanding grid scan — move to grid points and scan all loaded chunks.
+                // Grid spacing = 128 blocks (≈ server view distance). No artificial radius cap.
+                // Each move loads a fresh set of chunks; findPortalAll() searches every loaded block.
+                if (!portalBlock && isConnected() && !currentCancelToken.cancelled) {
+                    if (isConnected()) bot.chat(`No ${portalLabel} portal in loaded area. Starting exhaustive grid scan...`);
+                    const origin = bot.entity.position.clone();
+                    const GRID_STEP = 128;
+                    let layer = 1;
+                    gridScan: while (!currentCancelToken.cancelled && isConnected()) {
+                        // Expanding square shell at Manhattan distance `layer`
+                        const ring = [];
+                        for (let i = -layer; i <= layer; i++) {
+                            ring.push([i, -layer]);
+                            ring.push([i,  layer]);
+                        }
+                        for (let j = -layer + 1; j < layer; j++) {
+                            ring.push([-layer, j]);
+                            ring.push([ layer, j]);
+                        }
+                        for (const [gi, gj] of ring) {
+                            if (currentCancelToken.cancelled || !isConnected()) break gridScan;
+                            const gx = origin.x + gi * GRID_STEP;
+                            const gz = origin.z + gj * GRID_STEP;
+                            // Segmented step to grid point
+                            const gdist = Math.sqrt((gx - bot.entity.position.x) ** 2 + (gz - bot.entity.position.z) ** 2);
+                            const gTimeout = Math.max(30000, gdist * 600);
+                            try {
+                                await withTimeout(
+                                    bot.pathfinder.goto(new goals.GoalXZ(gx, gz)),
+                                    gTimeout, 'portal grid scan step',
+                                    () => { try { bot.pathfinder.setGoal(null); bot.clearControlStates(); } catch (_) {} }
+                                );
+                            } catch (e) {
+                                bot.clearControlStates();
+                            }
+                            if (!isConnected() || currentCancelToken.cancelled) break gridScan;
+                            portalBlock = findPortalAll();
+                            if (portalBlock) {
+                                console.log(`[Actuator] Found ${portalLabel} portal at grid point (${gi},${gj}) layer ${layer}.`);
+                                break gridScan;
+                            }
+                        }
+                        if (portalBlock) break gridScan;
+                        layer++;
+                        // Absolute safety cap: ~6400 blocks radius (layer 50)
+                        if (layer > 50) {
+                            if (isConnected()) process.send({ type: 'USER_CHAT', data: { username: "System", message: `No ${portalLabel} portal found within 6400 blocks. You must build one.`, environment: getEnvironmentContext() } });
+                            break gridScan;
                         }
                     }
                 }
 
                 if (!portalBlock) {
-                    bot.chat(`Could not find a ${portalLabel} portal.`);
-                    process.send({ type: 'USER_CHAT', data: { username: "System", message: `${portalLabel} portal not found after searching. Build one or add a waypoint named "${action.target || 'nether'}_portal".`, environment: getEnvironmentContext() } });
+                    if (isConnected()) bot.chat(`${portalLabel} portal not found.`);
                 } else {
                     bot.chat(`Found ${portalLabel} portal. Entering...`);
                     try {
@@ -3069,10 +3188,16 @@ process.on('message', async (msg) => {
 // Global Error Handling
 bot.on('kicked', (reason) => {
     console.log(`[Actuator] Kicked: ${reason}`);
+    currentCancelToken.cancelled = true;
+    actionQueue = [];
+    try { bot.pathfinder.setGoal(null); } catch (_) {}
     process.send({ type: 'ERROR', category: 'Kicked', details: reason });
 });
 bot.on('error', (err) => {
     console.error(`[Actuator] Bot Error: ${err.message}`);
+    currentCancelToken.cancelled = true;
+    actionQueue = [];
+    try { bot.pathfinder.setGoal(null); } catch (_) {}
     process.send({ type: 'ERROR', category: 'BotError', details: err.message });
 });
 bot.on('end', () => console.log('[Actuator] Disconnected from server.'));

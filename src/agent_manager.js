@@ -32,7 +32,7 @@ class AgentManager {
             this.botActionCounts.set(botId, 0); // reset count
             console.log(`[AgentManager] Bot ${botId} initialized with mode: ${options.mode}`);
         } else {
-            this.botModes.set(botId, 'normal');
+            this.botModes.set(botId, 'full_auto');
         }
 
         const botProcess = fork(path.join(__dirname, 'bot_actuator.js'), [], {

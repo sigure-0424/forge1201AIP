@@ -22,7 +22,7 @@ console.log(`Target Server: ${host}:${port}`);
 const manager = new AgentManager();
 
 // Goal 4: Disable commands in normal start
-const mode = process.env.MODE || 'normal';
+const mode = process.env.MODE || 'full_auto';
 console.log(`[Main] Operating in ${mode} mode.`);
 
 // Start bot instances
