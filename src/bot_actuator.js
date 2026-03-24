@@ -285,6 +285,19 @@ bot.on('spawn', async () => {
             }
         });
 
+        // Anti-AFK: rotate the bot's head slightly every ~25 seconds when completely idle.
+        // Without this, servers with AFK detection kick the bot during long LLM processing
+        // windows (~30s), causing ECONNRESET when the next action tries to write.
+        setInterval(() => {
+            if (isExecuting) return; // Don't interfere with active actions
+            if (bot._client?.socket?.writable !== true) return;
+            try {
+                const yaw = (Math.random() * Math.PI * 2) - Math.PI; // random yaw
+                const pitch = (Math.random() * 0.5) - 0.25;          // slight pitch variation
+                bot.look(yaw, pitch, false).catch(() => {});
+            } catch (_) {}
+        }, 25000);
+
         // Passive defense: attack nearby hostiles.
         // Only attack when the bot is IDLE — during active pathfinding the
         // bot.attack() call changes the look direction, conflicting with the
@@ -1528,6 +1541,19 @@ async function processActionQueue() {
         try {
             if (!action || !action.action) continue;
             if (currentCancelToken.cancelled) break;
+
+            // Guard: if the server connection is dead, don't try to send packets.
+            // This prevents ECONNRESET errors when the server disconnected during LLM processing.
+            if (bot._client?.socket?.writable !== true) {
+                console.log(`[Actuator] Socket not writable — dropping action '${action.action}' and triggering recovery.`);
+                currentCancelToken.cancelled = true;
+                actionQueue = [];
+                if (!_disconnectedNotified) {
+                    _disconnectedNotified = true;
+                    process.send({ type: 'ERROR', category: 'Disconnected', details: 'Socket not writable before action' });
+                }
+                break;
+            }
 
             if (action.target && typeof action.target === 'string') {
                 action.target = action.target.replace(/^[^:]+:/, '');
@@ -2816,6 +2842,11 @@ async function processActionQueue() {
                     ? bot.findBlock({ matching: portalBlockId, maxDistance: 256 })
                     : null;
 
+                // Yield to the event loop before the synchronous findBlock scan.
+                // findBlock iterates millions of blocks; without this yield, any pending
+                // keepalive ACK packets can't be sent during the scan, causing server timeout.
+                await new Promise(resolve => setImmediate(resolve));
+
                 let portalBlock = findPortalAll();
 
                 // Step via a known portal waypoint (name must contain 'portal' or 'gate')
@@ -2829,7 +2860,13 @@ async function processActionQueue() {
                         if (isConnected()) bot.chat(`Traveling to saved portal waypoint "${wp.name}"...`);
                         const wpDist = Math.sqrt((wp.x - bot.entity.position.x) ** 2 + (wp.z - bot.entity.position.z) ** 2);
                         const wpTimeout = Math.max(60000, wpDist * 600); // 600ms/block
-                        // Segmented walk — same approach as goto action
+                        // Segmented walk — no digging to avoid VeinMiner chain reactions
+                        const wpMovements = new Movements(bot, mcData);
+                        wpMovements.canDig = false;
+                        wpMovements.allowSprinting = true;
+                        wpMovements.liquidCost = 3;
+                        wpMovements.maxDropDown = 4;
+                        bot.pathfinder.setMovements(wpMovements);
                         const STEP = 64;
                         let wpReached = false;
                         while (!currentCancelToken.cancelled && !wpReached) {
@@ -2856,6 +2893,8 @@ async function processActionQueue() {
                             if (portalBlock) break;
                         }
                         if (!portalBlock) portalBlock = findPortalAll();
+                        // Restore normal movements
+                        bot.pathfinder.setMovements(movements);
                     }
                 }
 
@@ -2867,7 +2906,31 @@ async function processActionQueue() {
                     const origin = bot.entity.position.clone();
                     const GRID_STEP = 128;
                     let layer = 1;
+
+                    // Use a no-dig copy of movements for the portal search.
+                    // canDig=true causes the pathfinder to break blocks during navigation,
+                    // which triggers VeinMiner chain-reactions (mass block destruction),
+                    // rapid terrain changes, movement desync, and ultimately ECONNRESET.
+                    const scanMovements = new Movements(bot, mcData);
+                    scanMovements.canDig = false;
+                    scanMovements.allowSprinting = true;
+                    scanMovements.liquidCost = 3;
+                    scanMovements.maxDropDown = 4;
+                    bot.pathfinder.setMovements(scanMovements);
+
                     gridScan: while (!currentCancelToken.cancelled && isConnected()) {
+                        // If VeinMiner/terrain churn is active, wait for it to settle before
+                        // sending more movement packets — prevents position desync kicks.
+                        if (debouncer && debouncer.isCascadingWait) {
+                            await new Promise(resolve => {
+                                const done = () => resolve();
+                                debouncer.once('cascading_wait_end', done);
+                                // Safety timeout: don't wait more than 3 seconds
+                                setTimeout(done, 3000);
+                            });
+                        }
+                        if (currentCancelToken.cancelled || !isConnected()) break gridScan;
+
                         // Expanding square shell at Manhattan distance `layer`
                         const ring = [];
                         for (let i = -layer; i <= layer; i++) {
@@ -2909,11 +2972,16 @@ async function processActionQueue() {
                             break gridScan;
                         }
                     }
+                    // Restore normal movements (canDig=true) after scan
+                    bot.pathfinder.setMovements(movements);
                 }
 
                 if (!portalBlock) {
                     if (isConnected()) bot.chat(`${portalLabel} portal not found.`);
                 } else {
+                    if (!isConnected()) {
+                        console.log(`[Actuator] navigate_portal: portal found but socket dead, aborting.`);
+                    } else {
                     bot.chat(`Found ${portalLabel} portal. Entering...`);
                     try {
                         await withTimeout(bot.pathfinder.goto(new goals.GoalNear(portalBlock.position.x, portalBlock.position.y, portalBlock.position.z, 1)), Math.max(timeoutMs, 60000), 'goto portal', () => bot.pathfinder.setGoal(null));
@@ -2943,7 +3011,8 @@ async function processActionQueue() {
                         bot.setControlState('forward', false);
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: `Portal transit timeout: ${e.message}`, environment: getEnvironmentContext() } });
                     }
-                }
+                    } // close isConnected else
+                } // close outer portalBlock else
 
             // ── activate_end_portal ───────────────────────────────────────────
             } else if (action.action === 'activate_end_portal') {
@@ -3188,8 +3257,11 @@ process.on('message', async (msg) => {
 });
 
 // Global Error Handling
+// Track whether we already notified AgentManager of a disconnect to avoid double-recovery.
+let _disconnectedNotified = false;
 bot.on('kicked', (reason) => {
     console.log(`[Actuator] Kicked: ${reason}`);
+    _disconnectedNotified = true;
     currentCancelToken.cancelled = true;
     actionQueue = [];
     try { bot.pathfinder.setGoal(null); } catch (_) {}
@@ -3197,9 +3269,21 @@ bot.on('kicked', (reason) => {
 });
 bot.on('error', (err) => {
     console.error(`[Actuator] Bot Error: ${err.message}`);
+    _disconnectedNotified = true;
     currentCancelToken.cancelled = true;
     actionQueue = [];
     try { bot.pathfinder.setGoal(null); } catch (_) {}
     process.send({ type: 'ERROR', category: 'BotError', details: err.message });
 });
-bot.on('end', () => console.log('[Actuator] Disconnected from server.'));
+// Fix: 'end' fires when the server closes the connection gracefully (FIN, not RST).
+// Without this, AgentManager never learns the bot died and never restarts it.
+bot.on('end', () => {
+    console.log('[Actuator] Disconnected from server.');
+    if (!_disconnectedNotified) {
+        _disconnectedNotified = true;
+        currentCancelToken.cancelled = true;
+        actionQueue = [];
+        try { bot.pathfinder.setGoal(null); } catch (_) {}
+        process.send({ type: 'ERROR', category: 'Disconnected', details: 'Server closed connection' });
+    }
+});

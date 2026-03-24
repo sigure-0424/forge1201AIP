@@ -280,13 +280,20 @@ class DynamicRegistryInjector {
                         return Reflect.get(target, prop);
                     }
 
-                    // Fallback to finding the block that owns this state ID based on block IDs
-                    let bestKey = undefined;
-                    for (let i = 0; i < sortedKeys.length; i++) {
-                        if (sortedKeys[i] <= stateId) {
-                            bestKey = sortedKeys[i];
+                    // True binary search: find the largest registered key ≤ stateId.
+                    // The previous linear scan was O(N) with N≈25 000+; on the first
+                    // findBlock() call tens of thousands of uncached state IDs are resolved,
+                    // each doing a full linear pass → several seconds of event-loop blocking
+                    // → server keepalive ACK never sent → server RSTs the TCP connection
+                    // → ECONNRESET.  Binary search is O(log N) ≈ 15 comparisons instead.
+                    let lo = 0, hi = sortedKeys.length - 1, bestKey = undefined;
+                    while (lo <= hi) {
+                        const mid = (lo + hi) >>> 1;
+                        if (sortedKeys[mid] <= stateId) {
+                            bestKey = sortedKeys[mid];
+                            lo = mid + 1;
                         } else {
-                            break;
+                            hi = mid - 1;
                         }
                     }
 

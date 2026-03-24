@@ -39,6 +39,19 @@ Entries:
 
 - Added find_land action (/spreadplayers 0 0 0 2000 false <bot>) to scatter bot to dry land before live tests; test_live.js now calls find_land after waitForReady and uses land base coords for return test | src/bot_actuator.js, test_live.js --claude --BUGFIX-20260322-001
 
+## 2026-03-24 — BUGFIX-20260324-002: Bot Connectivity & ECONNRESET Fixes
+
+### Changes
+- **bot_actuator.js**: 4 fixes.
+  1. **`bot.on('end')` triggers recovery**: Previously silent — server sending graceful FIN left the bot permanently dead with AgentManager unaware. Now sends `ERROR/Disconnected` IPC (guarded by `_disconnectedNotified` flag to prevent double-recovery when both 'error' and 'end' fire).
+  2. **Socket check at action queue start**: Each action now checks `socket.writable` before executing. If the socket died during LLM processing, drops the queue and sends recovery signal instead of writing to a dead socket (which was the ECONNRESET source).
+  3. **navigate_portal `isConnected()` guard**: Added guard before `bot.chat` and `bot.pathfinder.goto` after portal is found.
+  4. **Anti-AFK head rotation**: `setInterval` every 25s does a small random `bot.look()` when not executing. Prevents server AFK-kick during LLM processing windows (30+ seconds), which was the root cause of the ECONNRESET.
+- **agent_manager.js**: 2 fixes.
+  1. **Preserve host/port on restart**: `botConnOptions` Map stores original connection options; `scheduleRestart` passes them so restarted bot connects to the real server (not `localhost:25565` fallback).
+  2. **`Disconnected` recovery case**: Added to `triggerRecoveryPipeline` switch.
+- All 6 tests passing.
+
 ## 2026-03-24 — TASK-20260324-001: Combat & Navigation Robustness
 
 ### Changes

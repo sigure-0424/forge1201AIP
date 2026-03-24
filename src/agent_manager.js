@@ -28,6 +28,7 @@ function safeBotProcessSend(botProcess, message) {
 class AgentManager {
     constructor() {
         this.bots = new Map(); // Map of botId to ChildProcess
+        this.botConnOptions = new Map(); // Preserves host/port so restarts reconnect to the same server
         this.restartingBots = new Set();
         this.llm = new LLMClient(process.env.OLLAMA_MODEL || 'gpt-oss:20b-cloud');
         this.activeLlmRequests = new Map(); // Concurrency control
@@ -45,6 +46,11 @@ class AgentManager {
     startBot(botId, options) {
         if (this.restartingBots.has(botId)) {
             this.restartingBots.delete(botId);
+        }
+        // Preserve connection options (host/port) from the initial start so that
+        // restarts reconnect to the same server (not localhost:25565 fallback).
+        if (options && !options.isRestart) {
+            this.botConnOptions.set(botId, { host: options.host, port: options.port });
         }
         console.log(`[AgentManager] Starting bot process for ${botId}...`);
 
@@ -541,6 +547,10 @@ BLAZE (fire resistance): brew(fire_resistance) → navigate_portal(nether) → g
                 console.log(`[Recovery] General bot error. Attempting restart...`);
                 this.scheduleRestart(botId);
                 break;
+            case 'Disconnected':
+                console.log(`[Recovery] Server closed connection. Restarting bot...`);
+                this.scheduleRestart(botId);
+                break;
             case 'HandshakeTimeout':
                 console.log(`[Recovery] Restarting process for ${botId} and updating proxy rules.`);
                 this.scheduleRestart(botId);
@@ -575,9 +585,10 @@ BLAZE (fire resistance): brew(fire_resistance) → navigate_portal(nether) → g
             existingProcess.kill('SIGKILL');
         }
 
+        const connOpts = this.botConnOptions.get(botId) || {};
         setTimeout(() => {
             console.log(`[AgentManager] Restarting ${botId}...`);
-            this.startBot(botId, { isRestart: true });
+            this.startBot(botId, { ...connOpts, isRestart: true });
         }, 5000); // Increased delay to prevent rapid crash loops
     }
 
