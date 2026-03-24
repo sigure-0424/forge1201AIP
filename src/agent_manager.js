@@ -3,6 +3,28 @@ const { fork } = require('child_process');
 const path = require('path');
 const LLMClient = require('./llm_client');
 
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[AgentManager] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('[AgentManager] Uncaught Exception:', error);
+    if (error.code !== 'ECONNRESET' && error.code !== 'ECONNABORTED') {
+        process.exit(1);
+    }
+});
+
+// Helper to avoid ECONNABORTED crashing the orchestrator when IPC pipe is closed
+function safeBotProcessSend(botProcess, message) {
+    try {
+        if (botProcess && botProcess.send) {
+            botProcess.send(message);
+        }
+    } catch (e) {
+        // Ignore IPC pipe errors
+    }
+}
+
 class AgentManager {
     constructor() {
         this.bots = new Map(); // Map of botId to ChildProcess
@@ -45,6 +67,10 @@ class AgentManager {
             this.handleIPCMessage(botId, message);
         });
 
+        botProcess.on('error', (err) => {
+            console.error(`[AgentManager] Bot process ${botId} spawn/IPC error:`, err);
+        });
+
         botProcess.on('exit', (code, signal) => {
             console.log(`[AgentManager] Bot process ${botId} exited with code ${code} and signal ${signal}`);
             this.bots.delete(botId);
@@ -58,6 +84,7 @@ class AgentManager {
     handleProcessCrash(botId, code) {
         if (code !== 0 && code !== null) {
             console.error(`[AgentManager] Bot process ${botId} crashed with code ${code}.`);
+            this.scheduleRestart(botId);
         }
     }
 
@@ -107,8 +134,8 @@ class AgentManager {
                         this.chatQueue.set(botId, []);
                         const botProcess = this.bots.get(botId);
                         if (botProcess) {
-                            botProcess.send({ type: 'EXECUTE_ACTION', action: [{ action: "stop" }] });
-                            botProcess.send({ type: 'EXECUTE_ACTION', action: [{ action: "chat", message: "Tasks cancelled. Waiting for instructions." }] });
+                            safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: [{ action: "stop" }] });
+                            safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: [{ action: "chat", message: "Tasks cancelled. Waiting for instructions." }] });
                         }
                         return; // Done
                     } else {
@@ -122,7 +149,7 @@ class AgentManager {
                     this.awaitingCancellationChoice.set(botId, true);
                     const botProcess = this.bots.get(botId);
                     if (botProcess) {
-                        botProcess.send({ type: 'EXECUTE_ACTION', action: [{ action: "chat", message: `I have ${queue.length + (this.activeLlmRequests.has(botId) ? 1 : 0)} pending requests. Cancel them to prioritize this? (y/n)` }] });
+                        safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: [{ action: "chat", message: `I have ${queue.length + (this.activeLlmRequests.has(botId) ? 1 : 0)} pending requests. Cancel them to prioritize this? (y/n)` }] });
                     }
                     // Wait for the next message to process the choice
                     queue.push(data); // Push it so if they say no, it gets processed
@@ -172,7 +199,7 @@ class AgentManager {
         if (!fs.existsSync(tasksPath)) {
             console.error(`[AgentManager] tasks.json not found at ${tasksPath}`);
             const botProcess = this.bots.get(botId);
-            if (botProcess) botProcess.send({ type: 'EXECUTE_ACTION', action: [{ action: 'chat', message: 'Task Mode error: tasks.json not found.' }] });
+            if (botProcess) safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: [{ action: 'chat', message: 'Task Mode error: tasks.json not found.' }] });
             return;
         }
 
@@ -195,7 +222,7 @@ class AgentManager {
         if (isLegacyFormat) {
             console.log(`[AgentManager] Legacy tasks.json format: dispatching ${tasks.length} raw actions.`);
             const botProcess = this.bots.get(botId);
-            if (botProcess) botProcess.send({ type: 'EXECUTE_ACTION', action: tasks });
+            if (botProcess) safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: tasks });
             return;
         }
 
@@ -205,7 +232,7 @@ class AgentManager {
             console.log(`[AgentManager] All tasks completed for ${botId}. Returning to normal mode.`);
             this.botModes.set(botId, 'normal');
             const botProcess = this.bots.get(botId);
-            if (botProcess) botProcess.send({ type: 'EXECUTE_ACTION', action: [{ action: 'chat', message: 'All tasks complete!' }] });
+            if (botProcess) safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: [{ action: 'chat', message: 'All tasks complete!' }] });
             return;
         }
 
@@ -466,7 +493,7 @@ BLAZE (fire resistance): brew(fire_resistance) → navigate_portal(nether) → g
             // Send the full sanitized array, including 'stop', to the bot actuator
             // so it can clear its current goals if 'stop' is part of a chained command.
             if (sanitizedActions.length > 0) {
-                 botProcess.send({ type: 'EXECUTE_ACTION', action: sanitizedActions });
+                 safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: sanitizedActions });
             }
         }
 
@@ -478,7 +505,7 @@ BLAZE (fire resistance): brew(fire_resistance) → navigate_portal(nether) → g
 
             if (count >= 20) {
                 console.log(`[AgentManager] Bot ${botId} reached action limit in Full Auto. Switching to Task Mode.`);
-                botProcess.send({ type: 'EXECUTE_ACTION', action: [{ action: "chat", message: "Action limit reached. Switching to Task Mode." }] });
+                safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: [{ action: "chat", message: "Action limit reached. Switching to Task Mode." }] });
                 this.botModes.set(botId, 'task_mode');
 
                 // Clear active requests to make way for task mode
@@ -521,7 +548,7 @@ BLAZE (fire resistance): brew(fire_resistance) → navigate_portal(nether) → g
             case 'UndefinedReference':
                 console.log(`[Recovery] Instructing ${botId} to inject dummy block...`);
                 const botProcess = this.bots.get(botId);
-                if (botProcess) botProcess.send({ command: 'inject_dummy_block' });
+                if (botProcess) safeBotProcessSend(botProcess, { command: 'inject_dummy_block' });
                 break;
             case 'StackOverflow':
                 console.log(`[Recovery] Updating LLM prompt for ${botId} with 'Inaccessible Area' rule.`);
