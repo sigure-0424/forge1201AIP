@@ -337,11 +337,14 @@ bot.on('spawn', async () => {
             // Enemies 3.5–16 blocks away: let runWaitLoop handle them during idle
         }, 600);
 
-        // Issue 3: High-priority projectile evasion interrupt.
+        // Projectile evasion interrupt.
         // Runs every 150ms independently of the combat loop and pathfinder.
         // Raises shield when an inbound projectile is detected; falls back to
-        // dodging to a safe direction (avoiding lava and cliffs).
+        // direct control-state dodge (avoids lava/cliff). Pathfinder-based
+        // dodge was replaced because GoalXZ fails with "no path" in Nether terrain.
         let _evasionCooldown = 0;
+        let _evasionDodging = false;
+        const DODGE_CONTROLS = ['right', 'left', 'back', 'forward']; // index maps to dodgeAngles order
         setInterval(() => {
             if (!bot.entity || bot.health <= 0) return;
             if (!bot._client?.socket?.writable) return;
@@ -353,12 +356,14 @@ bot.on('spawn', async () => {
                 const n = (e.name || e.displayName || '').toLowerCase();
                 if (!n.includes('fireball') && !n.includes('arrow') &&
                     !n.includes('shulker_bullet') && !n.includes('wither_skull')) return false;
-                if (e.position.distanceTo(evasionPos) > 12) return false;
+                // Issue 2: Extended range 12→20 so we detect Blaze fireballs earlier
+                if (e.position.distanceTo(evasionPos) > 20) return false;
                 const vel = e.velocity;
                 if (!vel || (Math.abs(vel.x) < 0.01 && Math.abs(vel.y) < 0.01 && Math.abs(vel.z) < 0.01)) return false;
                 const toBot = evasionPos.minus(e.position).normalize();
                 const dot = vel.x * toBot.x + vel.y * toBot.y + vel.z * toBot.z;
-                return dot > 0.35; // confirmed inbound trajectory
+                // Issue 2: Lowered threshold 0.35→0.2 — Blaze fireballs have moderate velocity
+                return dot > 0.2;
             });
             if (!incomingProj) return;
             // Raise shield first (highest priority)
@@ -370,7 +375,7 @@ bot.on('spawn', async () => {
                     return;
                 }
             } catch (_) {}
-            // No shield — dodge to safest perpendicular direction
+            // No shield — dodge via direct control states (works in Nether, no path-planning needed).
             // Priority: right, left, back, forward (avoid lava/cliff in each)
             const dodgeAngles = [
                 bot.entity.yaw + Math.PI / 2,
@@ -379,7 +384,8 @@ bot.on('spawn', async () => {
                 bot.entity.yaw,
             ];
             const DODGE = 4;
-            for (const angle of dodgeAngles) {
+            for (let di = 0; di < dodgeAngles.length; di++) {
+                const angle = dodgeAngles[di];
                 const tx = evasionPos.x + DODGE * Math.sin(angle);
                 const tz = evasionPos.z + DODGE * Math.cos(angle);
                 const fx = Math.floor(tx), fy = Math.floor(evasionPos.y), fz = Math.floor(tz);
@@ -391,10 +397,18 @@ bot.on('spawn', async () => {
                 if (isHazard(bFoot) || isHazard(bBelow1)) continue;
                 // Avoid cliff: 2+ consecutive air blocks below = drop hazard
                 if (isAir(bBelow1) && isAir(bBelow2)) continue;
-                try {
-                    bot.pathfinder.goto(new goals.GoalXZ(Math.round(tx), Math.round(tz))).catch(() => {});
-                } catch (_) {}
-                _evasionCooldown = now + 500;
+                // Use direct control states — instant, works regardless of terrain path-finding
+                const ctrl = DODGE_CONTROLS[di];
+                try { bot.pathfinder.setGoal(null); } catch (_) {}
+                bot.setControlState(ctrl, true);
+                bot.setControlState('sprint', true);
+                bot.setControlState('jump', true);
+                _evasionCooldown = now + 600;
+                setTimeout(() => {
+                    bot.setControlState(ctrl, false);
+                    bot.setControlState('sprint', false);
+                    bot.setControlState('jump', false);
+                }, 400);
                 break;
             }
         }, 150);
@@ -1655,10 +1669,49 @@ async function processActionQueue() {
                         }
 
                         bot.chat(`[System] Navigating to death coordinates X:${Math.round(targetPos.x)} Y:${Math.round(targetPos.y)} Z:${Math.round(targetPos.z)}...`);
-                        await withTimeout(
-                            bot.pathfinder.goto(new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 2)),
-                            Math.max(timeoutMs, 90000), 'goto gravestone', () => bot.pathfinder.setGoal(null)
-                        );
+                        // Issue 1: Nether has complex terrain (lava, ceiling) so a single GoalNear
+                        // fails with "no path". Use the same 32-block XZ step loop as goto to
+                        // approach incrementally — each small hop is within pathfinder budget.
+                        {
+                            const REC_STEP = 32;
+                            const wpTimeout = Math.max(timeoutMs, 90000);
+                            let recRem = Math.sqrt(
+                                (targetPos.x - bot.entity.position.x) ** 2 +
+                                (targetPos.z - bot.entity.position.z) ** 2
+                            );
+                            let recStuck = 0;
+                            while (recRem > 2 && !currentCancelToken.cancelled) {
+                                const cx = bot.entity.position.x, cz = bot.entity.position.z;
+                                const rdx = targetPos.x - cx, rdz = targetPos.z - cz;
+                                const a = Math.atan2(rdz, rdx);
+                                const wx = recRem > REC_STEP ? cx + REC_STEP * Math.cos(a) : targetPos.x;
+                                const wz = recRem > REC_STEP ? cz + REC_STEP * Math.sin(a) : targetPos.z;
+                                try {
+                                    await withTimeout(
+                                        bot.pathfinder.goto(new goals.GoalXZ(Math.round(wx), Math.round(wz))),
+                                        wpTimeout, 'recover step', () => bot.pathfinder.setGoal(null)
+                                    );
+                                } catch (stepErr) {
+                                    console.log(`[Actuator] recover step err: ${stepErr.message}`);
+                                    if (stepErr.message?.toLowerCase().includes('no path')) { recStuck++; }
+                                }
+                                const newRem = Math.sqrt(
+                                    (targetPos.x - bot.entity.position.x) ** 2 +
+                                    (targetPos.z - bot.entity.position.z) ** 2
+                                );
+                                if (newRem <= 2) break;
+                                if (newRem >= recRem - 0.5) { recStuck++; } else { recStuck = 0; }
+                                if (recStuck >= 3) { console.log('[Actuator] recover stuck 3× — aborting nav, searching nearby'); break; }
+                                recRem = newRem;
+                            }
+                            // Final precise approach
+                            try {
+                                await withTimeout(
+                                    bot.pathfinder.goto(new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 2)),
+                                    30000, 'recover final', () => bot.pathfinder.setGoal(null)
+                                );
+                            } catch (_) {}
+                        }
 
                         // Wait for chunks to load — grave may be just outside loaded range on arrival
                         try { await bot.waitForChunksToLoad(); } catch (e) {}
