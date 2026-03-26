@@ -29,6 +29,24 @@ The system achieves stability in modded environments through a **Vanilla-Mapping
 2.  **Install**: `npm install`
 3.  **Run**: `node index.js`
 
+## WebUI Dashboard
+
+A local WebUI is available at `http://localhost:3000` after starting the bot. You can use this dashboard to view bot health, inventory, active tasks, and send chat commands directly without in-game access.
+
+## Configuration & Requirements
+
+- **Node.js**: Requires Node.js v18+. [Download here](https://nodejs.org/)
+- **Ollama (Local LLM)**: For local hosting, install [Ollama](https://ollama.com/) and run `ollama run gpt-oss:20b` (recommended model).
+- **Model Switching**: Edit `OLLAMA_MODEL` and `OLLAMA_URL` in `.env` or configuration files to switch between cloud APIs (like OpenAI/Anthropic via proxies) and local hosting.
+- **Hardware Requirements**:
+  - 1 Bot (Local LLM): 16GB RAM, modern 6-core CPU, 8GB+ VRAM GPU (for 20B models).
+  - 3+ Bots: 32GB RAM, 12GB+ VRAM.
+  - Cloud API: Minimal requirements (4GB RAM).
+
+## Streamlined Startup
+
+Windows users can simply double-click `run.bat` to launch the system. Linux/Mac users can run `./run.sh`.
+
 ## Commands
 
 Once the bot is online, you can use the following in-game chat commands:

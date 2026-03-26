@@ -32,6 +32,7 @@
     "prismarine-nbt": "^2.8.0",
     "prismarine-registry": "^1.11.0",
     "smol-toml": "^1.6.1",
+    "socket.io": "^4.8.3",
     "vec3": "^0.1.10",
     "ws": "^8.20.0"
   },
