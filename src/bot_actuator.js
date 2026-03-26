@@ -33,6 +33,11 @@ console.error = function(...args) {
 
 // Robust Crash Protection
 process.on('uncaughtException', (err) => {
+    // Suppress crash if caused by unknown mod protocol/registry errors
+    if (err.message && (err.message.includes('unknown packet') || err.message.includes('unknown stateId') || err.message.includes('unknown block') || err.message.includes('unverified'))) {
+        console.log(`[Actuator] Suppressed known mod compatibility exception: ${err.message}`);
+        return;
+    }
     console.error(`[Actuator] CRITICAL UNCAUGHT EXCEPTION: ${err.message}`);
     console.error(err.stack);
     process.send({ type: 'ERROR', category: 'BotError', details: err.message });
@@ -72,7 +77,17 @@ const bot = mineflayer.createBot({
     username: botId,
     version: '1.20.1',
     maxPacketSize: 10 * 1024 * 1024,
-    disableChatSigning: true
+    disableChatSigning: true,
+    hideErrors: true
+});
+
+// Issue 6: Ignore errors from unverified mods to maintain robustness
+bot.on('error', (err) => {
+    if (err && err.message && (err.message.includes('unknown') || err.message.includes('unverified'))) {
+        console.log(`[Actuator] Ignored unverified mod error: ${err.message}`);
+        return;
+    }
+    console.error(`[Actuator Error] ${err.message || err}`);
 });
 
 const mcData = require('minecraft-data')(bot.version);

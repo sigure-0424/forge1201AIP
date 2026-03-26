@@ -1,6 +1,10 @@
 const AgentManager = require('./src/agent_manager');
 const ConfigRAGParser = require('./src/config_rag_parser');
 const path = require('path');
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const fs = require('fs');
 
 // Retrieve connection options from environment variables or use defaults
 const host = process.env.MC_HOST || 'localhost';
@@ -29,6 +33,78 @@ console.log(`[Main] Operating in ${mode} mode.`);
 for (const name of botNames) {
     manager.startBot(name, { host, port, mode });
 }
+
+// Setup WebUI Server
+const app = express();
+app.use(express.static(path.join(__dirname, 'public')));
+const server = http.createServer(app);
+const io = new Server(server);
+
+io.on('connection', (socket) => {
+    console.log('[WebUI] Client connected');
+
+    const statusInterval = setInterval(() => {
+        const statuses = {};
+        for (const botId of manager.bots.keys()) {
+            const debugPath = path.join(process.cwd(), `ai_debug_${botId}.json`);
+            try {
+                if (fs.existsSync(debugPath)) {
+                    statuses[botId] = JSON.parse(fs.readFileSync(debugPath, 'utf8'));
+                }
+            } catch(e) {}
+        }
+        socket.emit('bot_status', statuses);
+    }, 2000);
+
+    // Initial config broadcast
+    socket.emit('config_status', {
+        model: manager.llm.model,
+        url: manager.llm.url
+    });
+
+    socket.on('send_chat', ({ botId, message }) => {
+        console.log(`[WebUI] Chat to ${botId}: ${message}`);
+        manager.handleIPCMessage(botId, { type: 'USER_CHAT', data: { username: 'WebUI', message } });
+    });
+
+    socket.on('add_bot', ({ botId }) => {
+        console.log(`[WebUI] Adding bot ${botId}`);
+        manager.startBot(botId, { host, port, mode: 'full_auto' });
+    });
+
+    socket.on('update_config', ({ model, url }) => {
+        console.log(`[WebUI] Updating LLM config: ${model} @ ${url}`);
+        if (model) {
+            process.env.OLLAMA_MODEL = model;
+            manager.llm.model = model;
+        }
+        if (url) {
+            process.env.OLLAMA_URL = url;
+            manager.llm.url = url;
+        }
+        // Broadcast to all connected clients
+        io.emit('config_status', { model: manager.llm.model, url: manager.llm.url });
+    });
+
+    socket.on('stop_bot', ({ botId }) => {
+        console.log(`[WebUI] Stopping bot ${botId}`);
+        const botProc = manager.bots.get(botId);
+        if (botProc) {
+            botProc.kill('SIGINT');
+            manager.bots.delete(botId);
+            manager.activeLlmRequests.delete(botId);
+        }
+    });
+
+    socket.on('disconnect', () => {
+        console.log('[WebUI] Client disconnected');
+        clearInterval(statusInterval);
+    });
+});
+
+server.listen(3000, () => {
+    console.log('[Main] WebUI running on http://localhost:3000');
+});
 
 // Goal 11: Setup CLI Command Interpreter
 const readline = require('readline');
