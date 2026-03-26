@@ -1,5 +1,7 @@
 const mineflayer = require('mineflayer');
 const AgentManager = require('../src/agent_manager');
+const ForgeHandshakeStateMachine = require('../src/forge_handshake_state_machine');
+const DynamicRegistryInjector = require('../src/dynamic_registry_injector');
 const fs = require('fs');
 
 const host = process.env.MC_HOST || 'localhost';
@@ -7,10 +9,12 @@ const port = parseInt(process.env.MC_PORT || '25565', 10);
 const debugMode = process.env.DEBUG === 'true';
 
 const testMasterOptions = {
-    host: host,
+    host: host + '\0FML3\0',
     port: port,
     username: 'TestMaster',
     version: '1.20.1',
+    maxPacketSize: 10 * 1024 * 1024,
+    disableChatSigning: true,
     hideErrors: false
 };
 
@@ -48,6 +52,15 @@ function waitForBotChat(botId, pattern, timeoutMs = 120000) {
 async function startDebugger() {
     console.log('--- Starting Beta Debugging Test System ---');
     master = mineflayer.createBot(testMasterOptions);
+
+    master.on('inject_allowed', () => {
+        const handshake = new ForgeHandshakeStateMachine(master._client);
+        handshake.on('handshake_complete', (registrySyncBuffer) => {
+            const injector = new DynamicRegistryInjector(master.registry);
+            const parsed = injector.parseRegistryPayload(registrySyncBuffer);
+            injector.injectBlockToRegistry(parsed);
+        });
+    });
 
     master.on('spawn', async () => {
         console.log('[TestMaster] Spawned. Setting up test environment...');

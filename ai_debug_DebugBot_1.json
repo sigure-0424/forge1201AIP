@@ -1,0 +1,22 @@
+{
+  "timestamp": "2026-03-26T18:41:13.764Z",
+  "ready": true,
+  "position": {
+    "x": -31.3,
+    "y": 62,
+    "z": 28.3
+  },
+  "health": 18,
+  "food": 20,
+  "isExecuting": true,
+  "actionQueue": [],
+  "treeDir": null,
+  "inventory": [],
+  "armor": {
+    "head": null,
+    "torso": null,
+    "legs": null,
+    "feet": null,
+    "hand": null
+  }
+}
