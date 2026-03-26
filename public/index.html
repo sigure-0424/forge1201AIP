@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Player Dashboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Header ── -->
+  <header id="header">
+    <span class="logo">⛏ Forge AI Player</span>
+    <span class="server-info" id="server-info">connecting…</span>
+    <span id="status-dot" class="offline"></span>
+    <span id="header-bot-count">0 bots</span>
+    <button class="header-btn" id="manage-btn">Manage Bots</button>
+    <button class="header-btn" id="settings-btn">⚙ Settings</button>
+  </header>
+
+  <!-- ── Sidebar ── -->
+  <aside id="sidebar">
+    <div id="sidebar-header">Bots</div>
+    <div id="bot-list"></div>
+    <button id="add-bot-btn">＋ Add Bot</button>
+  </aside>
+
+  <!-- ── Main ── -->
+  <main id="main">
+
+    <!-- Chat -->
+    <section id="chat-panel">
+      <div id="chat-topbar">
+        <span class="topbar-label">Talking to:</span>
+        <select id="chat-bot-select"><option value="">— select bot —</option></select>
+      </div>
+      <div id="chat-messages"></div>
+      <div id="chat-input-row">
+        <input id="chat-input" type="text" placeholder="Type instruction (no prefix needed)…" autocomplete="off">
+        <button id="send-btn">Send</button>
+      </div>
+    </section>
+
+    <!-- Status / Inventory -->
+    <section id="status-panel">
+      <div id="inventory-panel">
+        <div class="panel-title">Inventory</div>
+        <div id="inventory-grid"><span class="inv-empty">Select a bot</span></div>
+      </div>
+      <div id="armor-panel">
+        <div class="panel-title">Equipment</div>
+        <div id="armor-rows"></div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ── Manage Bots Modal ── -->
+<div class="modal-overlay hidden" id="manage-modal">
+  <div class="modal">
+    <h2>Bot Management</h2>
+    <div id="bot-manage-list"></div>
+    <h3>Add New Bot</h3>
+    <div class="form-group">
+      <label>Bot Name (Minecraft username)</label>
+      <input id="new-bot-name" type="text" placeholder="AI_Bot_03">
+    </div>
+    <div class="form-group">
+      <label>Server Host <small style="color:var(--text-dim)">(leave blank for default)</small></label>
+      <input id="new-bot-host" type="text" placeholder="localhost">
+    </div>
+    <div class="form-group">
+      <label>Server Port</label>
+      <input id="new-bot-port" type="text" placeholder="25565">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="manage-cancel">Cancel</button>
+      <button class="btn btn-primary" id="manage-add">Add Bot</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Settings Modal ── -->
+<div class="modal-overlay hidden" id="settings-modal">
+  <div class="modal">
+    <h2>Settings</h2>
+    <h3>LLM / Ollama</h3>
+    <div class="form-group">
+      <label>Endpoint URL</label>
+      <input id="cfg-url" type="text" placeholder="http://172.24.96.1:11434/api/generate">
+    </div>
+    <div class="form-group">
+      <label>Model</label>
+      <input id="cfg-model" type="text" placeholder="gpt-oss:20b-cloud">
+    </div>
+    <div class="form-group">
+      <label>API Key <small style="color:var(--text-dim)">(leave blank to keep current)</small></label>
+      <input id="cfg-key" type="password" placeholder="••••••••">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="settings-cancel">Cancel</button>
+      <button class="btn btn-primary" id="settings-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

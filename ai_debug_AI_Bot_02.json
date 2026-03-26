@@ -1,13 +1,44 @@
 {
-  "timestamp": "2026-03-25T16:52:52.337Z",
+  "timestamp": "2026-03-26T10:08:26.138Z",
   "ready": true,
   "position": {
-    "x": 13.4,
-    "y": 70,
-    "z": 18.6
+    "x": -31.5,
+    "y": 66,
+    "z": 29.5
   },
   "health": 20,
-  "food": 19,
-  "isExecuting": false,
-  "actionQueue": []
+  "food": 20,
+  "isExecuting": true,
+  "actionQueue": [
+    {
+      "action": "loot_chest_special",
+      "target": {
+        "x": -31,
+        "y": 67,
+        "z": 30
+      }
+    }
+  ],
+  "treeDir": null,
+  "inventory": [
+    {
+      "name": "create:metal_girder",
+      "count": 1
+    },
+    {
+      "name": "create:andesite_scaffolding",
+      "count": 1
+    },
+    {
+      "name": "create:cyan_seat",
+      "count": 1
+    }
+  ],
+  "armor": {
+    "head": null,
+    "torso": null,
+    "legs": null,
+    "feet": null,
+    "hand": "create:metal_girder"
+  }
 }

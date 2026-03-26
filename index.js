@@ -1,5 +1,6 @@
-const AgentManager = require('./src/agent_manager');
+const AgentManager  = require('./src/agent_manager');
 const ConfigRAGParser = require('./src/config_rag_parser');
+const WebUIServer   = require('./src/web_ui_server');
 const path = require('path');
 
 // Retrieve connection options from environment variables or use defaults
@@ -20,6 +21,11 @@ console.log(`Starting Agent Manager...`);
 console.log(`Target Server: ${host}:${port}`);
 
 const manager = new AgentManager();
+
+// ── WebUI dashboard ──────────────────────────────────────────────────────────
+const webuiPort = parseInt(process.env.WEBUI_PORT || '3000', 10);
+const webui = new WebUIServer(manager, { host, port, mode: process.env.MODE || 'full_auto' });
+webui.start(webuiPort);
 
 // Goal 4: Disable commands in normal start
 const mode = process.env.MODE || 'full_auto';

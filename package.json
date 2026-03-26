@@ -7,6 +7,7 @@
     "doc": "docs"
   },
   "scripts": {
+    "start": "node index.js",
     "test": "node tests/test_fml3_handshake_logic_pure.js && node tests/test_dynamic_registry_injector.js && node tests/test_middlewares.js && node tests/test_config_rag_parser.js && node tests/test_agent_manager_recovery.js && node tests/test_e2e_integration.js",
     "test:e2e": "node tests/test_e2e_integration.js"
   },
@@ -23,6 +24,7 @@
   "homepage": "https://github.com/sigure-0424/ProjectBase#readme",
   "dependencies": {
     "dotenv": "^17.3.1",
+    "express": "^5.2.1",
     "minecraft-data": "^3.105.0",
     "mineflayer": "^4.35.0",
     "mineflayer-collectblock": "^1.6.0",
@@ -30,7 +32,8 @@
     "prismarine-nbt": "^2.8.0",
     "prismarine-registry": "^1.11.0",
     "smol-toml": "^1.6.1",
-    "vec3": "^0.1.10"
+    "vec3": "^0.1.10",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "minecraft-protocol": "^1.64.0"

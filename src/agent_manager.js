@@ -42,6 +42,11 @@ class AgentManager {
         this.botActionCounts = new Map(); // Map of botId to number of actions executed (for full auto to task mode switch)
         // Issue 1: task_mode processes tasks one at a time; currentTaskIdx tracks position in the list
         this.currentTaskIdx = new Map(); // Map of botId to index of in-progress task
+
+        // WebUI integration
+        this.botStatus = new Map();  // botId → latest BOT_STATUS payload
+        this.chatLog   = new Map();  // botId → array of { username, message, timestamp } (last 200)
+        this.onEvent   = null;       // set by WebUIServer to receive broadcast events
     }
 
     startBot(botId, options) {
@@ -69,6 +74,8 @@ class AgentManager {
         });
 
         this.bots.set(botId, botProcess);
+        if (!this.chatLog.has(botId)) this.chatLog.set(botId, []);
+        if (this.onEvent) this.onEvent({ type: 'bot_connected', botId });
 
         botProcess.on('message', (message) => {
             this.handleIPCMessage(botId, message);
@@ -82,6 +89,7 @@ class AgentManager {
             console.log(`[AgentManager] Bot process ${botId} exited with code ${code} and signal ${signal}`);
             this.bots.delete(botId);
             this.activeLlmRequests.delete(botId);
+            if (this.onEvent) this.onEvent({ type: 'bot_disconnected', botId });
             this.handleProcessCrash(botId, code);
         });
 
@@ -95,10 +103,23 @@ class AgentManager {
         }
     }
 
+    _appendChatLog(botId, username, message) {
+        const log = this.chatLog.get(botId) || [];
+        const entry = { username, message, timestamp: Date.now() };
+        log.push(entry);
+        if (log.length > 200) log.shift();
+        this.chatLog.set(botId, log);
+        if (this.onEvent) this.onEvent({ type: 'bot_chat', botId, ...entry });
+    }
+
     handleIPCMessage(botId, message) {
         if (message.type === 'ERROR') {
             console.error(`[AgentManager] Received ERROR from bot ${botId}: ${message.category} - ${message.details}`);
+            this._appendChatLog(botId, 'System', `[Error] ${message.category}: ${message.details}`);
             this.triggerRecoveryPipeline(botId, message);
+        } else if (message.type === 'BOT_STATUS') {
+            this.botStatus.set(botId, message.data);
+            if (this.onEvent) this.onEvent({ type: 'bot_status', botId, data: message.data });
         } else if (message.type === 'LOG') {
             console.log(`[Bot ${botId}] ${message.data}`);
         } else if (message.type === 'USER_CHAT') {
@@ -121,6 +142,9 @@ class AgentManager {
             }
 
             let currentMode = this.botModes.get(botId) || 'normal';
+
+            // Log every inbound chat to the WebUI
+            this._appendChatLog(botId, data.username, data.message);
 
             if (!isSystem) {
                 // Improvement 1: '-!' async queries are processed immediately without interrupting
@@ -512,6 +536,7 @@ Current Environment: ${JSON.stringify(data.environment)}${taskContext}
 [{"action": "give", "target": "player_name", "item": "oak_log", "quantity": 64}]
 [{"action": "equip", "target": "diamond_pickaxe"}]
 [{"action": "equip_armor"}]                                                       -- equips best armor in inventory
+[{"action": "find_and_equip"}]                                                    -- finds nearby equipment chests (smooth_stone marker) and takes missing gear (1 per slot/tool)
 [{"action": "craft", "target": "wooden_pickaxe", "quantity": 1}]
 [{"action": "place", "target": "crafting_table"}]
 

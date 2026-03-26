@@ -1,13 +1,36 @@
 {
-  "timestamp": "2026-03-25T16:52:54.972Z",
+  "timestamp": "2026-03-26T10:08:47.760Z",
   "ready": true,
   "position": {
-    "x": -74.4,
-    "y": 64.1,
-    "z": 6.5
+    "x": -40.5,
+    "y": 63,
+    "z": 27.5
   },
-  "health": 1,
-  "food": 15,
+  "health": 20,
+  "food": 20,
   "isExecuting": false,
-  "actionQueue": []
+  "actionQueue": [
+    {
+      "action": "loot_chest_special",
+      "target": {
+        "x": -32,
+        "y": 67,
+        "z": 30
+      }
+    }
+  ],
+  "treeDir": null,
+  "inventory": [
+    {
+      "name": "create:metal_girder",
+      "count": 1
+    }
+  ],
+  "armor": {
+    "head": null,
+    "torso": null,
+    "legs": null,
+    "feet": null,
+    "hand": null
+  }
 }
