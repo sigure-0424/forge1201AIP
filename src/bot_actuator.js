@@ -211,7 +211,7 @@ bot.on('spawn', async () => {
     if (bot.registry.blocksArray) {
         for (const block of bot.registry.blocksArray) {
             const name = block.name.toLowerCase();
-            const isGrave = name.includes('grave') || name.includes('tomb') || name.includes('crave');
+            const isGrave = name.includes('grave') || name.includes('tomb') || name.includes('crave') || name.includes('obituary') || name.includes('death');
 
             if (block.isUnknownModBlock && !isGrave) {
                 movements.blocksCantBreak.add(block.id);
@@ -267,8 +267,8 @@ bot.on('spawn', async () => {
         bot.on('health', () => {
             if (bot.food < 15) {
                 const food = getBestFoodItem();
-                if (food && (!bot.pathfinder.isMoving() && !bot.pathfinder.isMining())) {
-                    bot.equip(food, 'hand').then(() => bot.consume().catch(() => {}));
+                if (food && !bot.pathfinder.isMining()) {
+                    bot.equip(food, 'hand').then(() => bot.consume().catch(() => {})).catch(() => {});
                 }
             }
 
@@ -522,13 +522,30 @@ bot.on('spawn', async () => {
                     // terrain errors) still happen. MLG water covers those cases.
                     if (_fallStartY === null) _fallStartY = curY;
                     const fallDist = _fallStartY - curY;
-                    if (fallDist > 8 && !_mlgAttempted) {
-                        const wb = bot.inventory.items().find(i => i.name === 'water_bucket');
-                        if (wb) {
-                            _mlgAttempted = true;
-                            bot.equip(wb, 'hand')
-                                .then(() => bot.activateItem())
-                                .catch(() => {});
+                    if (fallDist > 5 && !_mlgAttempted) {
+                        // Find distance to solid ground below
+                        const cx = Math.floor(bot.entity.position.x);
+                        const cz = Math.floor(bot.entity.position.z);
+                        let groundY = null;
+                        for (let y = Math.floor(curY); y >= Math.max(Math.floor(curY) - 15, -64); y--) {
+                            const b = bot.blockAt(new Vec3(cx, y, cz));
+                            if (b && b.boundingBox === 'block' && !b.name.includes('water') && !b.name.includes('air')) {
+                                groundY = y;
+                                break;
+                            }
+                        }
+                        // Wait until close to the ground (e.g., 3-4 blocks)
+                        if (groundY !== null && curY - groundY <= 4) {
+                            const wb = bot.inventory.items().find(i => i.name === 'water_bucket');
+                            if (wb) {
+                                _mlgAttempted = true;
+                                bot.equip(wb, 'hand').then(async () => {
+                                    try {
+                                        await bot.look(bot.entity.yaw, -Math.PI / 2, true);
+                                        bot.activateItem();
+                                    } catch (e) {}
+                                }).catch(() => {});
+                            }
                         }
                     }
                 }
@@ -648,6 +665,10 @@ bot.on('spawn', async () => {
         if (!_botReady || isExecuting || actionQueue.length > 0) return;
         equipBestArmor().catch(() => {});
         equipBestWeapon().catch(() => {});
+        if (bot.food < 15 && !bot.pathfinder.isMining()) {
+            const food = getBestFoodItem();
+            if (food) bot.equip(food, 'hand').then(() => bot.consume().catch(() => {})).catch(() => {});
+        }
     }, 15000);
 
     // Also equip immediately after spawn/respawn
@@ -1478,7 +1499,7 @@ function inferToolCategory(block) {
     const name = block.name.toLowerCase();
 
     // Issue 5: Ensure graves use pickaxes to break properly
-    if (name.includes('grave') || name.includes('tomb') || name.includes('crave')) {
+    if (name.includes('grave') || name.includes('tomb') || name.includes('crave') || name.includes('obituary') || name.includes('death')) {
         return 'pickaxe';
     }
 
@@ -1953,7 +1974,7 @@ async function processActionQueue() {
                         const graveIds = Object.values(bot.registry.blocksByName)
                             .filter(b => {
                                 const n = b.name.toLowerCase();
-                                return n.includes('grave') || n.includes('tomb') || n.includes('crave');
+                                return n.includes('grave') || n.includes('tomb') || n.includes('crave') || n.includes('obituary') || n.includes('death');
                             })
                             .map(b => b.id);
 
@@ -1969,7 +1990,7 @@ async function processActionQueue() {
                                         60000, 'goto grave', () => bot.pathfinder.setGoal(null)
                                     );
                                     await equipBestTool(graveBlock);
-                                    await bot.dig(graveBlock, true);
+                                    try { await bot.dig(graveBlock, 'ignore'); } catch(e) { console.log(`[Actuator] dig grave error: ${e.message}`); }
                                     await new Promise(r => setTimeout(r, 1500));
                                     bot.chat(`[System] Recovered items from GraveStone.`);
                                     process.send({ type: 'USER_CHAT', data: { username: 'System', message: 'Successfully recovered GraveStone items.', environment: getEnvironmentContext() } });
