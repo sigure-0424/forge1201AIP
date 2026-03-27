@@ -369,11 +369,11 @@ The following env vars are referenced in code but absent from any README or `.en
 
 Items that can be completed in < 30 minutes each:
 
-- [ ] Add `count` cap (≤ 10) to bulk spawn endpoint
-- [ ] Add env-var allowlist to `PUT /api/config`
-- [ ] Add bot name regex validation
-- [ ] Delete expired `llmCooldown` entries after use
-- [ ] Reduce `chatLog` cap from 200 to 100 per bot
-- [ ] Create `.env.example` with all env vars documented
-- [ ] Add schema validation to `loadWaypoints()` (filter bad entries, warn)
-- [ ] Replace death-record write with per-bot file (`deaths_<botId>.json`)
+- [x] Add `count` cap (≤ 10) to bulk spawn endpoint
+- [x] Add env-var allowlist to `PUT /api/config`
+- [x] Add bot name regex validation
+- [x] Delete expired `llmCooldown` entries after use
+- [x] Reduce `chatLog` cap from 200 to 100 per bot
+- [x] Create `.env.example` with all env vars documented
+- [x] Add schema validation to `loadWaypoints()` (filter bad entries, warn)
+- [x] Replace death-record write with per-bot file (`deaths_<botId>.json`)

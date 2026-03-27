@@ -107,7 +107,7 @@ class AgentManager {
         const log = this.chatLog.get(botId) || [];
         const entry = { username, message, timestamp: Date.now() };
         log.push(entry);
-        if (log.length > 200) log.shift();
+        while (log.length > 100) log.shift();
         this.chatLog.set(botId, log);
         if (this.onEvent) this.onEvent({ type: 'bot_chat', botId, ...entry });
     }
@@ -188,7 +188,7 @@ class AgentManager {
                             try {
                                 const fs = require('fs');
                                 const path = require('path');
-                                const deathsPath = path.join(process.cwd(), 'data', 'deaths.json');
+                                const deathsPath = path.join(process.cwd(), 'data', `deaths_${botId}.json`);
                                 if (fs.existsSync(deathsPath)) {
                                     const deaths = JSON.parse(fs.readFileSync(deathsPath, 'utf8'));
                                     let latestPending = null;
@@ -203,7 +203,7 @@ class AgentManager {
                                     }
                                 }
                             } catch (e) {
-                                console.error(`[AgentManager] Error reading deaths.json: ${e.message}`);
+                                console.error(`[AgentManager] Error reading deaths_${botId}.json: ${e.message}`);
                             }
                         }
                         return; // Done
@@ -214,7 +214,7 @@ class AgentManager {
                         try {
                             const fs = require('fs');
                             const path = require('path');
-                            const deathsPath = path.join(process.cwd(), 'data', 'deaths.json');
+                            const deathsPath = path.join(process.cwd(), 'data', `deaths_${botId}.json`);
                             if (fs.existsSync(deathsPath)) {
                                 const deaths = JSON.parse(fs.readFileSync(deathsPath, 'utf8'));
                                 for (let i = deaths.length - 1; i >= 0; i--) {
@@ -226,7 +226,7 @@ class AgentManager {
                                 fs.writeFileSync(deathsPath, JSON.stringify(deaths, null, 2));
                             }
                         } catch (e) {
-                            console.error(`[AgentManager] Error updating deaths.json: ${e.message}`);
+                            console.error(`[AgentManager] Error updating deaths_${botId}.json: ${e.message}`);
                         }
                         const botProcess = this.bots.get(botId);
                         if (botProcess) {
@@ -418,6 +418,8 @@ Do NOT return any action other than chat.`;
             setTimeout(() => this.processNextQueueItem(botId), nextAllowedTime - now + 100);
             return;
         }
+
+        this.llmCooldown.delete(botId);
 
         const queue = this.chatQueue.get(botId) || [];
         if (queue.length === 0) return;

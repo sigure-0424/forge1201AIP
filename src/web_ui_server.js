@@ -51,6 +51,7 @@ class WebUIServer {
         this.app.post('/api/bots', (req, res) => {
             const { name, host, port } = req.body || {};
             if (!name) return res.status(400).json({ error: 'name required' });
+            if (!/^[a-zA-Z0-9_]{1,32}$/.test(name)) return res.status(400).json({ error: 'Invalid bot name. Must be 1-32 alphanumeric characters or underscores.' });
             if (m.bots.has(name)) return res.status(409).json({ error: 'Bot already running' });
             const h = host || this.defaults.host || 'localhost';
             const p = parseInt(port || this.defaults.port || 25565);
@@ -114,13 +115,24 @@ class WebUIServer {
 
         // PUT /api/config — update LLM settings (in-process; does not rewrite .env)
         this.app.put('/api/config', (req, res) => {
-            const { ollamaUrl, ollamaModel, ollamaApiKey } = req.body || {};
-            if (ollamaUrl)   process.env.OLLAMA_URL   = ollamaUrl;
-            if (ollamaModel) {
-                process.env.OLLAMA_MODEL = ollamaModel;
-                m.llm.model = ollamaModel;
+            const allowedKeys = ['OLLAMA_URL', 'OLLAMA_MODEL', 'OLLAMA_API_KEY', 'OLLAMA_AUTH_SCHEME', 'WEBUI_PORT'];
+            const keys = Object.keys(req.body || {});
+
+            for (const key of keys) {
+                if (!allowedKeys.includes(key)) {
+                    return res.status(400).json({ error: `Invalid configuration key: ${key}` });
+                }
             }
-            if (ollamaApiKey) process.env.OLLAMA_API_KEY = ollamaApiKey;
+
+            if (req.body?.OLLAMA_URL)   process.env.OLLAMA_URL   = req.body.OLLAMA_URL;
+            if (req.body?.OLLAMA_MODEL) {
+                process.env.OLLAMA_MODEL = req.body.OLLAMA_MODEL;
+                m.llm.model = req.body.OLLAMA_MODEL;
+            }
+            if (req.body?.OLLAMA_API_KEY) process.env.OLLAMA_API_KEY = req.body.OLLAMA_API_KEY;
+            if (req.body?.OLLAMA_AUTH_SCHEME) process.env.OLLAMA_AUTH_SCHEME = req.body.OLLAMA_AUTH_SCHEME;
+            if (req.body?.WEBUI_PORT) process.env.WEBUI_PORT = req.body.WEBUI_PORT;
+
             res.json({ ok: true });
         });
 
@@ -145,8 +157,9 @@ class WebUIServer {
 
         // POST /api/bots/bulk — spawn N bots with auto-generated AI_Bot_XX names
         this.app.post('/api/bots/bulk', (req, res) => {
-            const count = parseInt(req.body?.count || 1, 10);
-            if (!count || count < 1 || count > 50) return res.status(400).json({ error: 'count must be 1–50' });
+            let count = parseInt(req.body?.count || 1, 10);
+            if (!count || count < 1) return res.status(400).json({ error: 'count must be at least 1' });
+            count = Math.min(count, 10);
 
             const h    = req.body?.host || this.defaults.host || 'localhost';
             const p    = parseInt(req.body?.port || this.defaults.port || 25565);

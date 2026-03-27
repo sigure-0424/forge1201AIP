@@ -166,7 +166,7 @@ let _lastHealth = 20;
 // Instead, track the last known safe position on a 2s interval.
 let _lastSafePos = null;
 let _lastSafeDim = 'overworld';
-const DEATHS_FILE = path.join(process.cwd(), 'data', 'deaths.json');
+const DEATHS_FILE = path.join(process.cwd(), 'data', `deaths_${botId}.json`);
 
 // Direction from land base toward trees, recorded during find_land step 4b.
 // Written to the debug file so test_live.js can use it for goto test direction.
@@ -1053,7 +1053,15 @@ const WAYPOINTS_FILE = path.join(process.cwd(), 'data', 'waypoints.json');
 function loadWaypoints() {
     try {
         if (fs.existsSync(WAYPOINTS_FILE)) {
-            return JSON.parse(fs.readFileSync(WAYPOINTS_FILE, 'utf8'));
+            const raw = JSON.parse(fs.readFileSync(WAYPOINTS_FILE, 'utf8'));
+            if (!Array.isArray(raw)) return [];
+            return raw.filter(w => {
+                if (!w || !w.name || w.x === undefined || w.y === undefined || w.z === undefined || !w.dimension) {
+                    console.warn(`[Actuator] Dropped invalid waypoint entry: ${JSON.stringify(w)}`);
+                    return false;
+                }
+                return true;
+            });
         }
     } catch (e) {}
     return [];
@@ -1952,6 +1960,7 @@ async function _killEnderDragon(cancelToken, combatMs, combatStart) {
         let crystal = null;
         let minCrystalDist = Infinity;
         for (const ent of Object.values(bot.entities)) {
+            if (!ent.isValid) continue;
             const n = (ent.name || '').toLowerCase();
             if (n !== 'end_crystal') continue;
             const d = bot.entity.position.distanceTo(ent.position);
@@ -2320,35 +2329,10 @@ async function processActionQueue() {
                                         bot.pathfinder.goto(new goals.GoalNear(graveBlock.position.x, graveBlock.position.y, graveBlock.position.z, 1)),
                                         60000, 'goto grave', () => bot.pathfinder.setGoal(null)
                                     );
-                                    // Issue 3: GraveStone mod typically requires right-click to open
-                                    // a chest-like container window. Try openContainer() first;
-                                    // fall back to digging if the mod stores items differently.
-                                    let graveOpened = false;
-                                    try {
-                                        const graveWindow = await Promise.race([
-                                            bot.openContainer(graveBlock),
-                                            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))
-                                        ]);
-                                        // Take all items from the gravestone inventory
-                                        const graveItems = graveWindow.slots.filter(s => s !== null && s.type !== -1);
-                                        for (const gi of graveItems) {
-                                            try {
-                                                await bot.clickWindow(gi.slot, 0, 0); // left-click to take item
-                                                await new Promise(r => setTimeout(r, 100));
-                                            } catch (_) {}
-                                        }
-                                        bot.closeWindow(graveWindow);
-                                        graveOpened = true;
-                                        console.log(`[Actuator] Opened gravestone container, took ${graveItems.length} item slots.`);
-                                    } catch (containerErr) {
-                                        console.log(`[Actuator] Container open failed (${containerErr.message}), falling back to digging.`);
-                                    }
-                                    if (!graveOpened) {
-                                        // Fall back: break the gravestone to drop items
-                                        await equipBestTool(graveBlock);
-                                        try { await bot.dig(graveBlock, 'ignore'); } catch(e) { console.log(`[Actuator] dig grave error: ${e.message}`); }
-                                        await new Promise(r => setTimeout(r, 1500));
-                                    }
+                                    // Break the gravestone to drop items as the mod expects it to be destroyed
+                                    await equipBestTool(graveBlock);
+                                    try { await bot.dig(graveBlock, 'ignore'); } catch(e) { console.log(`[Actuator] dig grave error: ${e.message}`); }
+                                    await new Promise(r => setTimeout(r, 1500));
                                     bot.chat(`[System] Recovered items from GraveStone.`);
                                     process.send({ type: 'USER_CHAT', data: { username: 'System', message: 'Successfully recovered GraveStone items.', environment: getEnvironmentContext() } });
                                     await equipBestArmor();
