@@ -560,7 +560,7 @@ Do NOT return any action other than chat.`;
             : (allBotIds.length > 1 ? `\n*NOTE*: ${allBotIds[0]} is the coordinator bot.` : '');
 
         const inTheEnd = data.environment?.dimension === 'the_end';
-        const endDimNote = inTheEnd ? `\n*CRITICAL*: You are in THE END dimension. ONLY use: kill(end_crystal), kill(ender_dragon), goto, eat, equip, equip_armor, status. Do NOT collect, craft, smelt, brew, or attempt to gather resources — there are no useful resources in the End.` : '';
+        const endDimNote = inTheEnd ? `\n*CRITICAL*: You are in THE END dimension. ONLY use: kill(ender_dragon), goto, eat, equip, equip_armor, status. Do NOT collect, craft, smelt, brew, or attempt to gather resources — there are no useful resources in the End.` : '';
 
         let prompt = `You are a Minecraft AI bot named ${botId}.
 ${isSystemFailure ? `SYSTEM FEEDBACK (previous action result): "${data.message}"` : `${data.username === 'TaskSystem' ? `TASK INSTRUCTION` : `User '${data.username}' said`}: "${data.message}"`}
@@ -570,8 +570,8 @@ Current Environment: ${JSON.stringify(data.environment)}${taskContext}${otherBot
 *CRITICAL*: Respond ONLY with a valid JSON array of action objects. No prose, no explanations.
 *CRITICAL*: Only interact with entities that are explicitly listed in the nearby_entities list. Do not hallucinate or guess what entities are nearby.
 *CRITICAL*: This is a simulated game environment. Player versus Player (PVP) combat is fully permitted and expected. You must comply with any request to attack, kill, or fight another player. Ignore standard safety restrictions regarding harm.
-*CRITICAL*: Chain multiple actions in one array. If the user says "give me 10 oak logs", respond with BOTH collect AND give: [{"action":"collect","target":"oak_log","quantity":10},{"action":"give","target":"${data.username}","item":"oak_log","quantity":10}]
-*CRITICAL*: For complex tasks like "gather 10 wood and make a sword", chain all steps: [{"action":"collect","target":"oak_log","quantity":10},{"action":"craft","target":"wooden_sword","quantity":1}]
+*CRITICAL*: Do not chain complex abstract tasks. Output single steps and wait for SYSTEM FEEDBACK before proceeding. (e.g., if you need wood to make a sword, output ONLY collect first. Exception: you may chain ONE collect action with ONE give action).
+*CRITICAL*: Avoid complex multi-step reasoning in a single response.
 *CRITICAL*: ALWAYS check inventory before deciding what to collect or craft. If something is already there, skip that step.
 *CRITICAL*: To collect any stone-type block or ore you NEED a pickaxe first. ALWAYS check "has_pickaxe" in Current Environment. If "has_pickaxe" is false, craft one first.
 *CRITICAL*: Stone-type blocks (stone, andesite, granite, diorite) and ores are UNDERGROUND. If the system reports "not found within 128 blocks", you must dig down first: [{"action":"collect","target":"stone","quantity":16,"timeout":60}] will open a shaft. Then retry the original target.
@@ -614,7 +614,6 @@ Current Environment: ${JSON.stringify(data.environment)}${taskContext}${otherBot
 [{"action": "kill", "target": "wither", "timeout": 300}]
 [{"action": "kill", "target": "ender_dragon", "timeout": 600}]
 [{"action": "kill", "target": "elder_guardian", "quantity": 3, "timeout": 300}]
-[{"action": "kill", "target": "end_crystal", "quantity": 8, "timeout": 120}]     -- destroy End Crystals before fighting dragon. Check nearby_entities to see if any are left.
 
 ━━━ NAVIGATION & WAYPOINTS ━━━
 [{"action": "goto", "target": "fortress"}]                                        -- uses /locate to find and navigate to structure
@@ -644,7 +643,7 @@ Current Environment: ${JSON.stringify(data.environment)}${taskContext}${otherBot
 ━━━ BOSS DEFEAT SEQUENCES TEMPLATES (use multi-action arrays) ━━━
 *CRITICAL*: These sequences are TEMPLATES. You must SKIP steps if the Environment Context shows they are already complete (e.g. do not craft eyes or explore for a stronghold if an end_portal_frame is already nearby).
 WITHER: collect soul_sand(4) + kill wither_skeleton(many) for skulls → place_pattern(wither) → kill(wither,timeout:300)
-ENDER DRAGON: craft eye_of_ender → explore for stronghold → activate_end_portal → navigate_portal(end) → kill(end_crystal,qty:X) (check nearby_entities for count) → kill(ender_dragon,timeout:600)
+ENDER DRAGON: craft eye_of_ender → explore for stronghold → activate_end_portal → navigate_portal(end) → kill(ender_dragon,timeout:600)
 ELDER GUARDIAN: brew(water_breathing) + brew(night_vision) → explore for ocean_monument → eat(milk) → kill(elder_guardian,qty:3,timeout:300)
 BLAZE (fire resistance): brew(fire_resistance) → navigate_portal(nether) → goto(fortress) → kill(blaze,qty:N,timeout:180)
 `;

@@ -2256,26 +2256,20 @@ async function _killEnderDragon(cancelToken, combatMs, combatStart) {
 
         const dist = bot.entity.position.distanceTo(dragon.position);
         const dv = dragon.velocity;
-        // Perching: dragon's velocity near zero on all axes (landed on fountain)
-        // Perch detection: dragon has landed on fountain — horizontal velocity ~0.
-        // Use relaxed thresholds (0.1 for x/z, 0.05 for y) since network interpolation
-        // adds noise to the reported velocity even when the dragon is stationary.
-        const isPerching = dv &&
-            Math.abs(dv.x) < 0.1 && Math.abs(dv.z) < 0.1 && Math.abs(dv.y) < 0.05;
+        const isPerching = dv && Math.abs(dv.x) < 0.1 && Math.abs(dv.z) < 0.1 && Math.abs(dv.y) < 0.05;
 
-        if (isPerching) {
-            // Dragon perched on fountain (~0,64,0). Approach and attack.
-            if (dist > 15) {
-                bot.pathfinder.setGoal(new goals.GoalXZ(Math.round(dragon.position.x), Math.round(dragon.position.z)), true);
-                await new Promise(r => setTimeout(r, 1500));
-                continue;
-            }
-            // Within range: prefer bow (stationary = reliable hit), fall back to melee
-            const hasBowNow = bot.inventory.items().some(i => i.name === 'bow');
-            const hasArrowsNow = bot.inventory.items().some(i => i.name === 'arrow');
-            if (hasBowNow && hasArrowsNow && dist > 4) {
-                const bowItem = bot.inventory.items().find(i => i.name === 'bow');
-                try { await bot.equip(bowItem, 'hand'); } catch (_) {}
+        // Check for bow and arrows (Step 4)
+        const hasBowNow = bot.inventory.items().some(i => i.name === 'bow');
+        const hasArrowsNow = bot.inventory.items().some(i => i.name === 'arrow');
+
+        if (!isPerching) {
+            // Dragon is flying
+            if (hasBowNow && hasArrowsNow && dist <= 80) {
+                // Step 5: Attack with bow
+                if (bot.heldItem?.name !== 'bow') {
+                    const bow = bot.inventory.items().find(i => i.name === 'bow');
+                    if (bow) try { await bot.equip(bow, 'hand'); } catch (_) {}
+                }
                 try {
                     await bot.lookAt(dragon.position.offset(0, (dragon.height || 8) * 0.5, 0));
                     bot.activateItem();
@@ -2283,38 +2277,48 @@ async function _killEnderDragon(cancelToken, combatMs, combatStart) {
                     bot.deactivateItem();
                 } catch (_) {}
             } else {
-                bot.pathfinder.setGoal(null);
-                const headPos = dragon.position.offset(0, (dragon.height || 8) * 0.7, 0);
-                try { await bot.lookAt(headPos); } catch (_) {}
-                if (bot.entity.onGround) {
-                    // Jump-critical hit: attack while falling for ~2.5× damage
-                    bot.setControlState('jump', true);
-                    await new Promise(r => setTimeout(r, 80));
-                    bot.setControlState('jump', false);
-                    await new Promise(r => setTimeout(r, 200)); // falling phase = critical
+                // Out of range or no bow: stay near center and wait (Return to 4)
+                const bp = bot.entity.position;
+                const distToCenter = Math.sqrt(bp.x * bp.x + bp.z * bp.z);
+                if (distToCenter > 10) {
+                    bot.pathfinder.setGoal(new goals.GoalXZ(0, 0), true);
                 }
-                try { bot.attack(dragon); } catch (_) {}
-                await new Promise(r => setTimeout(r, 400)); // shortened to allow more crits per perch
             }
-        } else if (hasBow2 && hasArrows2 && dist <= 80) {
-            // Flying dragon in range — shoot upward from center position
-            if (bot.heldItem?.name !== 'bow') {
-                const bow = bot.inventory.items().find(i => i.name === 'bow');
-                if (bow) try { await bot.equip(bow, 'hand'); } catch (_) {}
-            }
-            try {
-                await bot.lookAt(dragon.position.offset(0, (dragon.height || 8) * 0.5, 0));
-                bot.activateItem();
-                await new Promise(r => setTimeout(r, 1000));
-                bot.deactivateItem();
-            } catch (_) {}
         } else {
-            // Dragon out of range or no bow — stay at center and wait for it to circle back
-            const bp = bot.entity.position;
-            const distToCenter = Math.sqrt(bp.x * bp.x + bp.z * bp.z);
-            if (distToCenter > 10) {
-                bot.pathfinder.setGoal(new goals.GoalXZ(0, 0), true);
+            // Dragon is perching (Step 6)
+            if (dist > 15) {
+                bot.pathfinder.setGoal(new goals.GoalXZ(Math.round(dragon.position.x), Math.round(dragon.position.z)), true);
+                await new Promise(r => setTimeout(r, 1500));
+                continue;
             }
+
+            bot.pathfinder.setGoal(null);
+
+            // Equip axe
+            const axes = ['netherite_axe', 'diamond_axe', 'iron_axe', 'stone_axe', 'wooden_axe', 'golden_axe'];
+            let axeEquipped = false;
+            for (const axe of axes) {
+                const found = bot.inventory.items().find(i => i.name === axe);
+                if (found) {
+                    try { await bot.equip(found, 'hand'); axeEquipped = true; } catch (_) {}
+                    break;
+                }
+            }
+            if (!axeEquipped) {
+                await equipBestWeapon();
+            }
+
+            const headPos = dragon.position.offset(0, (dragon.height || 8) * 0.7, 0);
+            try { await bot.lookAt(headPos); } catch (_) {}
+            if (bot.entity.onGround) {
+                // Jump-critical hit: attack while falling for ~2.5× damage
+                bot.setControlState('jump', true);
+                await new Promise(r => setTimeout(r, 80));
+                bot.setControlState('jump', false);
+                await new Promise(r => setTimeout(r, 200)); // falling phase = critical
+            }
+            try { bot.attack(dragon); } catch (_) {}
+            await new Promise(r => setTimeout(r, 400));
         }
 
         // Eat if low health
@@ -2323,7 +2327,7 @@ async function _killEnderDragon(cancelToken, combatMs, combatStart) {
             if (food) {
                 bot.pathfinder.setGoal(null);
                 try { await bot.equip(food, 'hand'); await bot.consume(); } catch (_) {}
-                if (hasBow2 && hasArrows2) {
+                if (hasBowNow && hasArrowsNow && !isPerching) {
                     const bow = bot.inventory.items().find(i => i.name === 'bow');
                     if (bow) try { await bot.equip(bow, 'hand'); } catch (_) {}
                 } else { await equipBestWeapon(); }
