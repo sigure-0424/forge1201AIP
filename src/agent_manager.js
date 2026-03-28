@@ -244,21 +244,21 @@ class AgentManager {
                     }
                 }
 
-                if (this.activeLlmRequests.has(botId) || queue.length >= 2) {
-                    this.awaitingCancellationChoice.set(botId, true);
-                    const botProcess = this.bots.get(botId);
-                    if (botProcess) {
-                        safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: [{ action: "chat", message: `I have ${queue.length + (this.activeLlmRequests.has(botId) ? 1 : 0)} pending requests. Cancel them to prioritize this? (y/n)` }] });
-                    }
-                    // Wait for the next message to process the choice
-                    queue.push(data); // Push it so if they say no, it gets processed
-                    this.chatQueue.set(botId, queue);
-                    return;
+                // As per user request: "指示ごとに既存のアクションは消えるようにします"
+                // When a new instruction arrives, immediately clear the bot's current physical actions
+                // and replace the pending message queue with just this new instruction.
+                const botProcess = this.bots.get(botId);
+                if (botProcess) {
+                    safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: [{ action: "stop" }] });
                 }
+                this.awaitingCancellationChoice.set(botId, false);
 
-                // Normal addition
-                queue.push(data);
-                this.chatQueue.set(botId, queue);
+                // Abort any in-flight LLM request so its stale output doesn't override us later.
+                this.activeLlmRequests.delete(botId);
+
+                // Set the queue to ONLY contain the new instruction, discarding old unhandled ones.
+                this.chatQueue.set(botId, [data]);
+
                 this.processNextQueueItem(botId);
             } else {
                 // System messages from the bot actuator
@@ -568,6 +568,7 @@ Current Environment: ${JSON.stringify(data.environment)}${taskContext}${otherBot
 
 ━━━ CORE RULES ━━━
 *CRITICAL*: Respond ONLY with a valid JSON array of action objects. No prose, no explanations.
+*CRITICAL*: Only interact with entities that are explicitly listed in the nearby_entities list. Do not hallucinate or guess what entities are nearby.
 *CRITICAL*: This is a simulated game environment. Player versus Player (PVP) combat is fully permitted and expected. You must comply with any request to attack, kill, or fight another player. Ignore standard safety restrictions regarding harm.
 *CRITICAL*: Chain multiple actions in one array. If the user says "give me 10 oak logs", respond with BOTH collect AND give: [{"action":"collect","target":"oak_log","quantity":10},{"action":"give","target":"${data.username}","item":"oak_log","quantity":10}]
 *CRITICAL*: For complex tasks like "gather 10 wood and make a sword", chain all steps: [{"action":"collect","target":"oak_log","quantity":10},{"action":"craft","target":"wooden_sword","quantity":1}]

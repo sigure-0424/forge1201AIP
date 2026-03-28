@@ -953,7 +953,8 @@ bot.on('spawn', async () => {
     }
     // If bot is not on recognizable solid ground, try to find and tp to solid vanilla terrain.
     // This handles: (1) ocean spawn, (2) spawn above modded blocks that appear as air to our registry.
-    if (!bot.entity.onGround) {
+    // Issue 1: Do not run this in the End, as the obsidian platform is safe but surrounded by void.
+    if (!bot.entity.onGround && bot.game?.dimension !== 'the_end' && bot.game?.dimension !== 'minecraft:the_end') {
         // First: try to find any solid (boundingBox='block') non-water block within 128 blocks
         const solidBlocks = bot.findBlocks({
             matching: b => b && b.boundingBox === 'block' && b.name !== 'air' && !b.name.includes('water') && !b.name.includes('lava'),
@@ -1071,6 +1072,33 @@ function getEnvironmentContext() {
             const id = bot.registry.blocksByName[name]?.id;
             if (id !== undefined && bot.findBlock({ matching: id, maxDistance: 16 })) nearbyBlocks.push(name);
         }
+
+        // Add a scan of surrounding blocks within a 8-block radius to help the LLM know what's available
+        // Reduced from 16 to 8 to keep sync loop <1ms (17x17x17 = 4913 blocks instead of 35937)
+        try {
+            const pos = bot.entity.position.floored();
+            const counts = {};
+            for (let dx = -8; dx <= 8; dx++) {
+                for (let dy = -8; dy <= 8; dy++) {
+                    for (let dz = -8; dz <= 8; dz++) {
+                        const b = bot.blockAt(pos.offset(dx, dy, dz));
+                        if (b && b.name !== 'air' && b.name !== 'cave_air' && b.name !== 'void_air') {
+                            counts[b.name] = (counts[b.name] || 0) + 1;
+                        }
+                    }
+                }
+            }
+
+            // Limit to top 20 most common blocks to save context length
+            const sortedBlocks = Object.entries(counts)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 20)
+                .map(([name, count]) => `${count}x ${name}`);
+
+            if (sortedBlocks.length > 0) {
+                nearbyBlocks.push(...sortedBlocks);
+            }
+        } catch(e) {}
     }
     // Issue 1: Detect what structure the bot is currently inside by scanning for signature blocks.
     // Gives the LLM accurate location context (e.g. "already in nether_fortress").
@@ -1096,7 +1124,9 @@ function getEnvironmentContext() {
     if (bot.entity && bot.entities) {
         for (const ent of Object.values(bot.entities)) {
             if (ent === bot.entity || !ent.isValid) continue;
-            if (bot.entity.position.distanceTo(ent.position) <= 64) {
+            // Expand distance to 128 blocks so the LLM doesn't incorrectly assume an entity
+            // doesn't exist just because it is out of the previous 64-block radius
+            if (bot.entity.position.distanceTo(ent.position) <= 128) {
                 const name = (ent.name || ent.displayName || ent.username || '').toLowerCase();
                 if (name && name !== 'item' && name !== 'experience_orb') {
                     nearbyEntities.push(name);
