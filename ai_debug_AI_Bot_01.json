@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-03-28T07:30:56.494Z",
+  "timestamp": "2026-03-28T10:28:53.137Z",
   "ready": true,
   "position": {
-    "x": 5.1,
-    "y": 66,
-    "z": 17.9
+    "x": 1373.3,
+    "y": 8.1,
+    "z": 836.7
   },
   "health": 20,
   "food": 20,
@@ -34,7 +34,7 @@
     },
     {
       "name": "createbigcannons:molten_cast_iron",
-      "count": 11
+      "count": 14
     },
     {
       "name": "unknown",
@@ -42,7 +42,7 @@
     },
     {
       "name": "end_stone",
-      "count": 2
+      "count": 5
     }
   ],
   "armor": {

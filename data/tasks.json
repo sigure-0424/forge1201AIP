@@ -1,17 +1,27 @@
 [
   {
     "id": 1,
-    "status": "completed",
-    "description": "locate stronghold"
+    "status": "in_progress",
+    "description": "kill 12 endermen"
   },
   {
     "id": 2,
-    "status": "completed",
-    "description": "activate end portal"
+    "status": "pending",
+    "description": "kill 1 blaze"
   },
   {
     "id": 3,
-    "status": "completed",
-    "description": "navigate to end"
+    "status": "pending",
+    "description": "craft 12 eye_of_ender"
+  },
+  {
+    "id": 4,
+    "status": "pending",
+    "description": "activate_end_portal"
+  },
+  {
+    "id": 5,
+    "status": "pending",
+    "description": "go to end"
   }
 ]
