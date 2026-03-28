@@ -1,13 +1,13 @@
 {
-  "timestamp": "2026-03-28T10:38:17.408Z",
+  "timestamp": "2026-03-28T12:05:54.237Z",
   "ready": true,
   "position": {
-    "x": 80.5,
-    "y": 47,
-    "z": -6.5
+    "x": 1375.6,
+    "y": 9,
+    "z": 837.4
   },
   "health": 20,
-  "food": 19,
+  "food": 20,
   "isExecuting": true,
   "actionQueue": [],
   "treeDir": null,
@@ -17,12 +17,64 @@
       "count": 1
     },
     {
+      "name": "iron_pickaxe",
+      "count": 1
+    },
+    {
+      "name": "flint_and_steel",
+      "count": 1
+    },
+    {
+      "name": "iron_pickaxe",
+      "count": 1
+    },
+    {
+      "name": "iron_leggings",
+      "count": 1
+    },
+    {
+      "name": "iron_pickaxe",
+      "count": 1
+    },
+    {
+      "name": "oak_boat",
+      "count": 1
+    },
+    {
+      "name": "bucket",
+      "count": 1
+    },
+    {
       "name": "iron_axe",
       "count": 1
     },
     {
-      "name": "cooked_porkchop",
-      "count": 2
+      "name": "iron_axe",
+      "count": 1
+    },
+    {
+      "name": "iron_axe",
+      "count": 1
+    },
+    {
+      "name": "iron_pickaxe",
+      "count": 1
+    },
+    {
+      "name": "iron_axe",
+      "count": 1
+    },
+    {
+      "name": "iron_axe",
+      "count": 1
+    },
+    {
+      "name": "iron_axe",
+      "count": 1
+    },
+    {
+      "name": "end_stone",
+      "count": 4
     },
     {
       "name": "iron_pickaxe",
@@ -42,7 +94,11 @@
     },
     {
       "name": "end_stone",
-      "count": 5
+      "count": 64
+    },
+    {
+      "name": "iron_pickaxe",
+      "count": 1
     }
   ],
   "armor": {
@@ -50,6 +106,6 @@
     "torso": null,
     "legs": null,
     "feet": null,
-    "hand": "iron_pickaxe"
+    "hand": "iron_axe"
   }
 }
