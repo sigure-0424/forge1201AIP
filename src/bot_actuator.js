@@ -526,7 +526,7 @@ bot.on('spawn', async () => {
                 const bBelow1 = bot.blockAt(new Vec3(fx, fy - 1, fz));
                 const bBelow2 = bot.blockAt(new Vec3(fx, fy - 2, fz));
                 const isHazard = b => !b || b.name.includes('lava') || b.name.includes('fire') || b.name === 'magma_block';
-                const isAir    = b => !b || b.name === 'air';
+                const isAir    = b => !b || b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air';
                 if (isHazard(bFoot) || isHazard(bBelow1)) continue;
                 // Avoid cliff: 2+ consecutive air blocks below = drop hazard
                 if (isAir(bBelow1) && isAir(bBelow2)) continue;
@@ -1063,14 +1063,26 @@ bot.on('spawn', async () => {
 function getEnvironmentContext() {
     const nearbyBlocks = [];
     if (bot.entity) {
-        // Beds (by name suffix — works once the registry is correctly mapped)
-        const bedBlock = bot.findBlock({ matching: b => b && b.name.endsWith('_bed'), maxDistance: 16 });
-        if (bedBlock) nearbyBlocks.push(bedBlock.name);
-        // Other interactive blocks
-        for (const name of ['crafting_table', 'furnace', 'blast_furnace', 'smoker', 'chest', 'barrel',
-                             'anvil', 'enchanting_table', 'brewing_stand', 'end_portal', 'end_portal_frame', 'nether_portal']) {
+        // Find interactive blocks in a single pass to prevent blocking the event loop
+        const interactiveNames = ['crafting_table', 'furnace', 'blast_furnace', 'smoker', 'chest', 'barrel',
+                                  'anvil', 'enchanting_table', 'brewing_stand', 'end_portal', 'end_portal_frame', 'nether_portal'];
+        const interactiveIds = new Set();
+        for (const name of interactiveNames) {
             const id = bot.registry.blocksByName[name]?.id;
-            if (id !== undefined && bot.findBlock({ matching: id, maxDistance: 16 })) nearbyBlocks.push(name);
+            if (id !== undefined) interactiveIds.add(id);
+        }
+
+        // Also match any bed (which are suffixed with _bed)
+        const isInteractive = b => b && (interactiveIds.has(b.type) || b.name.endsWith('_bed'));
+
+        const foundInteractive = bot.findBlocks({ matching: isInteractive, maxDistance: 16, count: 24 });
+        const addedInteractive = new Set();
+        for (const pos of foundInteractive) {
+            const b = bot.blockAt(pos);
+            if (b && !addedInteractive.has(b.name)) {
+                nearbyBlocks.push(b.name);
+                addedInteractive.add(b.name);
+            }
         }
 
         // Add a scan of surrounding blocks within a 8-block radius to help the LLM know what's available
@@ -1109,12 +1121,27 @@ function getEnvironmentContext() {
             { name: 'stronghold',      blocks: ['end_portal_frame', 'mossy_stone_bricks'] },
             { name: 'ocean_monument',  blocks: ['prismarine', 'sea_lantern'] },
         ];
+
+        const markerIdToStruct = new Map();
         for (const { name, blocks } of structureMarkers) {
             for (const blockName of blocks) {
                 const id = bot.registry.blocksByName[blockName]?.id;
-                if (id !== undefined && bot.findBlock({ matching: id, maxDistance: 32 })) {
-                    nearbyStructures.push(name);
-                    break;
+                if (id !== undefined) markerIdToStruct.set(id, name);
+            }
+        }
+
+        const isMarker = b => b && markerIdToStruct.has(b.type);
+        // Reduced maxDistance from 32 to 24 to keep the scan extremely fast and prevent event loop stalling
+        const foundMarkers = bot.findBlocks({ matching: isMarker, maxDistance: 24, count: 20 });
+        const addedStructures = new Set();
+
+        for (const pos of foundMarkers) {
+            const b = bot.blockAt(pos);
+            if (b) {
+                const structName = markerIdToStruct.get(b.type);
+                if (structName && !addedStructures.has(structName)) {
+                    nearbyStructures.push(structName);
+                    addedStructures.add(structName);
                 }
             }
         }
