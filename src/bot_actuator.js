@@ -1067,7 +1067,7 @@ function getEnvironmentContext() {
         if (bedBlock) nearbyBlocks.push(bedBlock.name);
         // Other interactive blocks
         for (const name of ['crafting_table', 'furnace', 'blast_furnace', 'smoker', 'chest', 'barrel',
-                             'anvil', 'enchanting_table', 'brewing_stand']) {
+                             'anvil', 'enchanting_table', 'brewing_stand', 'end_portal', 'end_portal_frame', 'nether_portal']) {
             const id = bot.registry.blocksByName[name]?.id;
             if (id !== undefined && bot.findBlock({ matching: id, maxDistance: 16 })) nearbyBlocks.push(name);
         }
@@ -1092,6 +1092,25 @@ function getEnvironmentContext() {
         }
     }
 
+    const nearbyEntities = [];
+    if (bot.entity && bot.entities) {
+        for (const ent of Object.values(bot.entities)) {
+            if (ent === bot.entity || !ent.isValid) continue;
+            if (bot.entity.position.distanceTo(ent.position) <= 64) {
+                const name = (ent.name || ent.displayName || ent.username || '').toLowerCase();
+                if (name && name !== 'item' && name !== 'experience_orb') {
+                    nearbyEntities.push(name);
+                }
+            }
+        }
+    }
+    // Deduplicate and count nearby entities
+    const entityCounts = nearbyEntities.reduce((acc, name) => {
+        acc[name] = (acc[name] || 0) + 1;
+        return acc;
+    }, {});
+    const entitySummary = Object.entries(entityCounts).map(([name, count]) => `${count}x ${name}`);
+
     const inventoryItems = bot.inventory ? bot.inventory.items() : [];
     return {
         position: bot.entity ? {
@@ -1108,7 +1127,8 @@ function getEnvironmentContext() {
         has_axe: inventoryItems.some(i => i.name.endsWith('_axe')),
         has_sword: inventoryItems.some(i => i.name.endsWith('_sword')),
         nearby_blocks: nearbyBlocks,
-        nearby_structures: nearbyStructures
+        nearby_structures: nearbyStructures,
+        nearby_entities: entitySummary
     };
 }
 

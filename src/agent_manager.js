@@ -613,7 +613,7 @@ Current Environment: ${JSON.stringify(data.environment)}${taskContext}${otherBot
 [{"action": "kill", "target": "wither", "timeout": 300}]
 [{"action": "kill", "target": "ender_dragon", "timeout": 600}]
 [{"action": "kill", "target": "elder_guardian", "quantity": 3, "timeout": 300}]
-[{"action": "kill", "target": "end_crystal", "quantity": 8, "timeout": 120}]     -- destroy End Crystals before fighting dragon
+[{"action": "kill", "target": "end_crystal", "quantity": 8, "timeout": 120}]     -- destroy End Crystals before fighting dragon. Check nearby_entities to see if any are left.
 
 ━━━ NAVIGATION & WAYPOINTS ━━━
 [{"action": "goto", "target": "fortress"}]                                        -- uses /locate to find and navigate to structure
@@ -640,9 +640,10 @@ Current Environment: ${JSON.stringify(data.environment)}${taskContext}${otherBot
 *CRITICAL*: If a task is confirmed complete, the system advances automatically. Do NOT repeat completed tasks.
 [{"action": "set_tasks", "tasks": [{"description": "step 1"}, {"description": "step 2"}]}]   -- Create sequential tasks to solve an abstract user request like "kill the ender dragon". When using this, the bot will automatically switch to TASK MODE and execute them sequentially.
 
-━━━ BOSS DEFEAT SEQUENCES (use multi-action arrays) ━━━
+━━━ BOSS DEFEAT SEQUENCES TEMPLATES (use multi-action arrays) ━━━
+*CRITICAL*: These sequences are TEMPLATES. You must SKIP steps if the Environment Context shows they are already complete (e.g. do not craft eyes or explore for a stronghold if an end_portal_frame is already nearby).
 WITHER: collect soul_sand(4) + kill wither_skeleton(many) for skulls → place_pattern(wither) → kill(wither,timeout:300)
-ENDER DRAGON: craft eye_of_ender → explore for stronghold → activate_end_portal → navigate_portal(end) → kill(end_crystal,qty:8) → kill(ender_dragon,timeout:600)
+ENDER DRAGON: craft eye_of_ender → explore for stronghold → activate_end_portal → navigate_portal(end) → kill(end_crystal,qty:X) (check nearby_entities for count) → kill(ender_dragon,timeout:600)
 ELDER GUARDIAN: brew(water_breathing) + brew(night_vision) → explore for ocean_monument → eat(milk) → kill(elder_guardian,qty:3,timeout:300)
 BLAZE (fire resistance): brew(fire_resistance) → navigate_portal(nether) → goto(fortress) → kill(blaze,qty:N,timeout:180)
 `;
