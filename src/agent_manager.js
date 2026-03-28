@@ -253,6 +253,14 @@ class AgentManager {
                 }
                 this.awaitingCancellationChoice.set(botId, false);
 
+                // If the bot is in a task sequence, interrupt it and return to normal mode
+                // so the user's command isn't overridden by the next task in the queue.
+                if (this.botModes.get(botId) === 'task_mode') {
+                    console.log(`[AgentManager] User interrupted task mode. Switching ${botId} back to normal mode.`);
+                    this.botModes.set(botId, 'normal');
+                    this.currentTaskIdx.delete(botId);
+                }
+
                 // Abort any in-flight LLM request so its stale output doesn't override us later.
                 this.activeLlmRequests.delete(botId);
 
