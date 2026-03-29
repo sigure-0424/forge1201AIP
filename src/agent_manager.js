@@ -567,7 +567,7 @@ Do NOT return any action other than chat.`;
             ? `\n*CRITICAL*: You are the COORDINATOR bot (lowest name). You may delegate tasks or ask other bots for resources using ask_bot.`
             : (allBotIds.length > 1 ? `\n*NOTE*: ${allBotIds[0]} is the coordinator bot.` : '');
 
-        const inTheEnd = data.environment?.dimension === 'the_end';
+        const inTheEnd = data.environment?.dimension === 'the_end' || data.environment?.dimension === 'minecraft:the_end';
         const endDimNote = inTheEnd ? `\n*CRITICAL*: You are in THE END dimension. ONLY use: kill(ender_dragon), goto, eat, equip, equip_armor, status. Do NOT collect, craft, smelt, brew, or attempt to gather resources — there are no useful resources in the End.` : '';
 
         let prompt = `You are a Minecraft AI bot named ${botId}.
