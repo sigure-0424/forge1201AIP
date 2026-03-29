@@ -2319,8 +2319,9 @@ async function _killEnderDragon(cancelToken, combatMs, combatStart) {
             }
         } else {
             // Dragon is perching (Step 6)
-            if (dist > 15) {
-                bot.pathfinder.setGoal(new goals.GoalXZ(Math.round(dragon.position.x), Math.round(dragon.position.z)), true);
+            if (dist > 5) {
+                // Ensure bot climbs up the fountain by using GoalNear to target the dragon's actual position rather than just the XZ base
+                bot.pathfinder.setGoal(new goals.GoalNear(Math.round(dragon.position.x), Math.round(dragon.position.y), Math.round(dragon.position.z), 2), true);
                 await new Promise(r => setTimeout(r, 800));
                 continue;
             }
@@ -4665,6 +4666,10 @@ async function processActionQueue() {
                                 }
                             }, 500);
                         }), 12000, 'portal teleport');
+
+                        // CLEAR the action queue to avoid carrying overworld coordinates or old tasks into the new dimension
+                        actionQueue = [];
+
                         // Save portal location as waypoint for future use
                         const waypoints = loadWaypoints();
                         const wpName = `${action.target || 'nether'}_portal`;
@@ -4672,10 +4677,11 @@ async function processActionQueue() {
                             waypoints.push({ name: wpName, x: Math.round(portalBlock.position.x), y: Math.round(portalBlock.position.y), z: Math.round(portalBlock.position.z), dimension: bot.game.dimension });
                             saveWaypoints(waypoints);
                         }
-                        process.send({ type: 'USER_CHAT', data: { username: "System", message: `Entered portal. Now in ${bot.game.dimension}.`, environment: getEnvironmentContext() } });
+                        process.send({ type: 'USER_CHAT', data: { username: "System", message: `Entered portal. Now in ${bot.game.dimension}. Actions cleared.`, environment: getEnvironmentContext() } });
                     } catch (e) {
                         bot.setControlState('forward', false);
                         try { bot.pathfinder.setGoal(null); } catch (err) {}
+                        actionQueue = [];
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: `Portal transit timeout: ${e.message}`, environment: getEnvironmentContext() } });
                     }
                     } // close isConnected else
