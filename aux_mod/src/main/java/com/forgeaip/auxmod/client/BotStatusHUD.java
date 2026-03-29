@@ -34,6 +34,12 @@ public class BotStatusHUD {
     private static final int PADDING = 3;
     private static final int LINE_HEIGHT = 10;
 
+    /** Whether the HUD overlay is currently visible. Toggled by F8. */
+    private static volatile boolean visible = true;
+
+    public static boolean isVisible() { return visible; }
+    public static void toggleVisible() { visible = !visible; }
+
     // -------------------------------------------------------------------------
     // Render event
     // -------------------------------------------------------------------------
@@ -44,7 +50,7 @@ public class BotStatusHUD {
         if (event.getOverlay() != VanillaGuiOverlay.CHAT_PANEL.type()) return;
 
         if (!ForgeAIPConfig.CLIENT.hudEnabled.get()) return;
-        if (!ClientEvents.hudVisible) return;
+        if (!visible) return;
 
         Minecraft mc = Minecraft.getInstance();
         if (mc.options.hideGui) return;

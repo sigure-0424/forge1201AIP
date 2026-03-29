@@ -40,8 +40,11 @@ public class SafeZoneManager {
     public static class SafeZone {
         public final String name;
         public final double x1, y1, z1, x2, y2, z2;
+        /** Minecraft dimension key (e.g. "minecraft:overworld"). Null means any dimension. */
+        public final String dimension;
 
-        public SafeZone(String name, double x1, double y1, double z1, double x2, double y2, double z2) {
+        public SafeZone(String name, double x1, double y1, double z1,
+                        double x2, double y2, double z2, String dimension) {
             this.name = name;
             this.x1 = Math.min(x1, x2);
             this.y1 = Math.min(y1, y2);
@@ -49,13 +52,19 @@ public class SafeZoneManager {
             this.x2 = Math.max(x1, x2);
             this.y2 = Math.max(y1, y2);
             this.z2 = Math.max(z1, z2);
+            this.dimension = dimension;
+        }
+
+        /** Convenience constructor without dimension (matches any dimension). */
+        public SafeZone(String name, double x1, double y1, double z1, double x2, double y2, double z2) {
+            this(name, x1, y1, z1, x2, y2, z2, null);
         }
 
         /** Creates a chunk-aligned 16x256x16 zone from a chunk coordinate. */
-        public static SafeZone fromChunk(String name, int chunkX, int chunkZ) {
-            double x1 = chunkX * 16.0;
-            double z1 = chunkZ * 16.0;
-            return new SafeZone(name, x1, -64, z1, x1 + 16, 320, z1 + 16);
+        public static SafeZone fromChunk(String name, int chunkX, int chunkZ, String dimension) {
+            double bx = chunkX * 16.0;
+            double bz = chunkZ * 16.0;
+            return new SafeZone(name, bx, -64, bz, bx + 16, 320, bz + 16, dimension);
         }
 
         public AABB toAABB() {
@@ -66,12 +75,18 @@ public class SafeZoneManager {
             return x >= x1 && x <= x2 && y >= y1 && y <= y2 && z >= z1 && z <= z2;
         }
 
+        public boolean contains(double x, double y, double z, String dim) {
+            if (dimension != null && dim != null && !dimension.equals(dim)) return false;
+            return contains(x, y, z);
+        }
+
         /**
          * Serialize to a minimal JSON object string (no external library).
          */
         public String toJson() {
-            return String.format("{\"name\":\"%s\",\"x1\":%s,\"y1\":%s,\"z1\":%s,\"x2\":%s,\"y2\":%s,\"z2\":%s}",
-                    escapeJson(name), x1, y1, z1, x2, y2, z2);
+            String dimPart = dimension != null ? ",\"dimension\":\"" + escapeJson(dimension) + "\"" : "";
+            return String.format("{\"name\":\"%s\",\"x1\":%s,\"y1\":%s,\"z1\":%s,\"x2\":%s,\"y2\":%s,\"z2\":%s%s}",
+                    escapeJson(name), x1, y1, z1, x2, y2, z2, dimPart);
         }
 
         private static String escapeJson(String s) {
@@ -104,12 +119,18 @@ public class SafeZoneManager {
 
     /**
      * Returns the first safe zone that contains the given world coordinate, or null.
+     * @param dimension Minecraft dimension key (e.g. "minecraft:overworld"); may be null to match any.
      */
-    public SafeZone findContaining(double x, double y, double z) {
+    public SafeZone findContaining(double x, double y, double z, String dimension) {
         for (SafeZone zone : zones.values()) {
-            if (zone.contains(x, y, z)) return zone;
+            if (zone.contains(x, y, z, dimension)) return zone;
         }
         return null;
+    }
+
+    /** Overload without dimension — matches zones regardless of dimension. */
+    public SafeZone findContaining(double x, double y, double z) {
+        return findContaining(x, y, z, null);
     }
 
     /**
@@ -211,8 +232,9 @@ public class SafeZoneManager {
             double x2 = extractDouble(obj, "x2");
             double y2 = extractDouble(obj, "y2");
             double z2 = extractDouble(obj, "z2");
+            String dim = extractString(obj, "dimension"); // may be null
             if (name == null) return null;
-            return new SafeZone(name, x1, y1, z1, x2, y2, z2);
+            return new SafeZone(name, x1, y1, z1, x2, y2, z2, dim);
         } catch (Exception e) {
             return null;
         }

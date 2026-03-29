@@ -1,8 +1,10 @@
 package com.forgeaip.auxmod;
 
+import com.forgeaip.auxmod.client.ClientEvents;
 import com.forgeaip.auxmod.data.MacroManager;
 import com.forgeaip.auxmod.data.SafeZoneManager;
 import com.forgeaip.auxmod.network.OrchestratorClient;
+import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.fml.ModLoadingContext;
 import net.minecraftforge.fml.common.Mod;
@@ -24,6 +26,9 @@ public class AuxMod {
 
         // Register mod setup events
         FMLJavaModLoadingContext.get().getModEventBus().addListener(this::clientSetup);
+
+        // Register key mappings on the mod event bus
+        FMLJavaModLoadingContext.get().getModEventBus().addListener(ClientEvents::registerKeyMappings);
 
         // Register client event handlers via EventBusSubscriber annotation in ClientEvents
         MinecraftForge.EVENT_BUS.register(this);

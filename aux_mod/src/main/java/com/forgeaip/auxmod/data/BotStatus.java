@@ -20,6 +20,11 @@ public class BotStatus {
     public List<Map<String, Object>> actionQueue;
     public String currentAction; // first item in actionQueue or "idle"
 
+    /** Convenience accessor for currentAction, returning "idle" if null/empty. */
+    public String getCurrentAction() {
+        return (currentAction != null && !currentAction.isEmpty()) ? currentAction : "idle";
+    }
+
     public BotStatus() {
         this.botId = "";
         this.health = 0.0;
