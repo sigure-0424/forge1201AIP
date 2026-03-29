@@ -1201,7 +1201,8 @@ function getEnvironmentContext() {
         has_sword: inventoryItems.some(i => i.name.endsWith('_sword')),
         nearby_blocks: nearbyBlocks,
         nearby_structures: nearbyStructures,
-        nearby_entities: entitySummary
+        nearby_entities: entitySummary,
+        blackboard: _readBlackboard()
     };
 }
 
@@ -1347,6 +1348,49 @@ let _inStopMode = false;
 const QUEUE_CHECKPOINT_FILE = path.join(process.cwd(), 'data', `queue_checkpoint_${botId}.json`);
 const NON_RESUMABLE_ACTIONS = new Set(['give', 'smelt', 'brew', 'enchant', 'activate_end_portal', 'place_pattern', 'place', 'sleep', 'find_land', 'find_and_equip', 'loot_chest_special']);
 
+// ─── Blackboard (Change 2) ────────────────────────────────────────────────────
+const BLACKBOARD_FILE = path.join(process.cwd(), 'data', 'blackboard.json');
+
+function _readBlackboard() {
+    try {
+        if (!fs.existsSync(BLACKBOARD_FILE)) return {};
+        return JSON.parse(fs.readFileSync(BLACKBOARD_FILE, 'utf8'));
+    } catch(e) { return {}; }
+}
+
+function _writeBlackboard(data) {
+    try {
+        const dir = path.dirname(BLACKBOARD_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(BLACKBOARD_FILE, JSON.stringify(data, null, 2));
+    } catch(e) {}
+}
+
+// ─── Safe Zones (Change 3) ────────────────────────────────────────────────────
+const SAFE_ZONES_FILE = path.join(process.cwd(), 'data', 'safezones.json');
+
+function _loadSafeZones() {
+    try {
+        if (!fs.existsSync(SAFE_ZONES_FILE)) return [];
+        return JSON.parse(fs.readFileSync(SAFE_ZONES_FILE, 'utf8'));
+    } catch(e) { return []; }
+}
+
+function _isInSafeZone(pos, dimension) {
+    try {
+        const zones = _loadSafeZones();
+        for (const zone of zones) {
+            if (zone.dimension && zone.dimension !== dimension) continue;
+            if (pos.x >= zone.minX && pos.x <= zone.maxX &&
+                pos.y >= zone.minY && pos.y <= zone.maxY &&
+                pos.z >= zone.minZ && pos.z <= zone.maxZ) {
+                return true;
+            }
+        }
+    } catch(e) {}
+    return false;
+}
+
 function _saveQueueCheckpoint(queue) {
     try {
         const resumable = queue.filter(a => a && a.action && !NON_RESUMABLE_ACTIONS.has(a.action));
@@ -1377,6 +1421,49 @@ function _loadQueueCheckpoint() {
 
 function _clearQueueCheckpoint() {
     try { if (fs.existsSync(QUEUE_CHECKPOINT_FILE)) fs.unlinkSync(QUEUE_CHECKPOINT_FILE); } catch (e) {}
+}
+
+// ─── Boat Auto-Selection (Change 1) ──────────────────────────────────────────
+// Returns true if the straight-line path to (destX, destZ) crosses >20 consecutive
+// water blocks, the destination is >40 blocks away, and the bot is not in End/Nether.
+function _shouldUseBoat(destX, destZ) {
+    try {
+        if (!bot.entity) return false;
+        const dim = bot.game?.dimension || 'overworld';
+        if (dim === 'the_nether' || dim === 'minecraft:the_nether' ||
+            dim === 'the_end' || dim === 'minecraft:the_end') {
+            return false;
+        }
+        const cx = bot.entity.position.x, cz = bot.entity.position.z;
+        const dx = destX - cx, dz = destZ - cz;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist <= 40) return false;
+        // Sample every 4 blocks along the straight-line path
+        const steps = Math.floor(dist / 4);
+        if (steps === 0) return false;
+        let consecutive = 0;
+        let maxConsecutive = 0;
+        const waterBlockId = bot.registry.blocksByName['water']?.id;
+        for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const sx = cx + dx * t;
+            const sz = cz + dz * t;
+            // Sample at the bot's current Y and Y-1 to detect water surface
+            const bAt = bot.blockAt(new Vec3(Math.floor(sx), Math.floor(bot.entity.position.y), Math.floor(sz)));
+            const bBelow = bot.blockAt(new Vec3(Math.floor(sx), Math.floor(bot.entity.position.y) - 1, Math.floor(sz)));
+            const isWater = (b) => b && (b.name === 'water' || b.name === 'flowing_water' ||
+                                         (waterBlockId !== undefined && b.type === waterBlockId));
+            if (isWater(bAt) || isWater(bBelow)) {
+                consecutive++;
+                if (consecutive > maxConsecutive) maxConsecutive = consecutive;
+            } else {
+                consecutive = 0;
+            }
+        }
+        return maxConsecutive > 20;
+    } catch(e) {
+        return false;
+    }
 }
 
 // ─── Auto-Shredder ────────────────────────────────────────────────────────────
@@ -2971,6 +3058,37 @@ async function processActionQueue() {
                 // At worst-case movement speed (~2 b/s through water/climbing) a 64-block
                 // step takes 32s; 120s gives 3.7× safety margin without masking real hangs.
                 const wpTimeout = Math.max(timeoutMs, 120000);
+
+                // Change 1: Increase liquidCost to discourage long-distance water pathfinding.
+                if (movements) {
+                    movements.liquidCost = 8;
+                    bot.pathfinder.setMovements(movements);
+                }
+
+                // Change 1: Boat auto-selection — if the path crosses >20 consecutive water blocks
+                // and the destination is >40 blocks away, use boat action instead.
+                if (destX !== undefined && destZ !== undefined && _shouldUseBoat(destX, destZ)) {
+                    const hasBoat = bot.inventory.items().some(i => i.name.includes('boat'));
+                    const hasOakPlanks = bot.inventory.items().some(i => i.name === 'oak_planks');
+                    const hasOakLog = bot.inventory.items().some(i => i.name === 'oak_log' || i.name.endsWith('_log'));
+                    const canCraftBoat = hasBoat || hasOakPlanks || hasOakLog;
+                    if (canCraftBoat) {
+                        console.log(`[Actuator] goto: detected water-heavy path to (${Math.round(destX)},${Math.round(destZ)}). Switching to boat action.`);
+                        bot.chat('[System] Detected large water body ahead. Using boat for travel.');
+                        actionQueue.unshift({ action: 'boat', x: destX, z: destZ, timeout: action.timeout || 120 });
+                        continue;
+                    }
+                }
+
+                // Change 3: Warn if goto destination is inside a safe zone.
+                if (destX !== undefined && destZ !== undefined && bot.entity) {
+                    const currentDimForSZ = bot.game?.dimension || 'overworld';
+                    const destPosForSZ = new Vec3(destX, destY !== undefined ? destY : bot.entity.position.y, destZ);
+                    if (_isInSafeZone(destPosForSZ, currentDimForSZ)) {
+                        console.log(`[Actuator] goto: destination (${Math.round(destX)}, ${Math.round(destZ)}) is inside a safe zone. Movement allowed but warning issued.`);
+                        bot.chat('[System] Warning: destination is inside a safe zone.');
+                    }
+                }
 
                 if (destY !== undefined) {
                     bot.chat(`[System] Moving to X:${Math.round(destX)}, Y:${destY}, Z:${Math.round(destZ)}.`);
