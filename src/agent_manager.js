@@ -47,6 +47,9 @@ class AgentManager {
         // Issue 8: consecutive failure tracking for graceful halt
         this.consecutiveFailures = new Map(); // botId → number of consecutive failures
 
+        // Bug Fix 7: exponential backoff reconnect tracking
+        this.restartAttempts = new Map(); // botId → number of consecutive restart attempts
+
         // WebUI integration
         this.botStatus = new Map();  // botId → latest BOT_STATUS payload
         this.chatLog   = new Map();  // botId → array of { username, message, timestamp } (last 200)
@@ -124,6 +127,11 @@ class AgentManager {
         } else if (message.type === 'BOT_STATUS') {
             this.botStatus.set(botId, message.data);
             if (this.onEvent) this.onEvent({ type: 'bot_status', botId, data: message.data });
+            // Bug Fix 7: Reset backoff counter once the bot is confirmed live and sending status.
+            if (this.restartAttempts.has(botId)) {
+                console.log(`[AgentManager] Bot ${botId} is healthy — resetting reconnect backoff counter.`);
+                this.restartAttempts.delete(botId);
+            }
         } else if (message.type === 'LOG') {
             console.log(`[Bot ${botId}] ${message.data}`);
         } else if (message.type === 'USER_CHAT') {
@@ -553,12 +561,39 @@ Do NOT return any action other than chat.`;
             } catch(e) { return ''; }
         })() : '';
 
+        // Bug Fix 2: Expose the bot's currently executing action and pending queue so the
+        // LLM can make an informed decision about whether to replace, append, or ignore.
+        const botStatusNow = this.botStatus.get(botId) || {};
+        const currentQueueContext = (() => {
+            const exec = botStatusNow.isExecuting;
+            const queue = botStatusNow.actionQueue || [];
+            if (!exec && queue.length === 0) return '';
+            const currentDesc = exec && queue.length === 0 ? '(finishing last action)' : JSON.stringify(queue[0] || {});
+            const remaining = queue.slice(1);
+            return `\nCURRENT TASK: ${currentDesc}${remaining.length > 0 ? ` | QUEUED: ${JSON.stringify(remaining)}` : ''}`;
+        })();
+
         // Build other-bots context for multi-bot coordination
         const otherBotLines = [...this.botStatus.entries()]
             .filter(([id]) => id !== botId)
             .map(([id, s]) => `  ${id}: pos(${Math.round(s.position?.x||0)},${Math.round(s.position?.y||0)},${Math.round(s.position?.z||0)}) hp=${s.health} food=${s.food} inv=[${(s.inventory||[]).slice(0,6).map(i=>`${i.count}x${i.name}`).join(',')}]`)
             .join('\n');
         const otherBotsContext = otherBotLines ? `\n\n━━━ OTHER BOTS ━━━\n${otherBotLines}` : '';
+
+        // Change 2: Read shared blackboard and inject into prompt (up to 10 entries).
+        const blackboardContext = (() => {
+            try {
+                const fs = require('fs');
+                const path = require('path');
+                const bbPath = path.join(process.cwd(), 'data', 'blackboard.json');
+                if (!fs.existsSync(bbPath)) return '';
+                const bb = JSON.parse(fs.readFileSync(bbPath, 'utf8'));
+                const entries = Object.entries(bb).slice(0, 10);
+                if (entries.length === 0) return '';
+                const lines = entries.map(([k, v]) => `  ${k}: ${JSON.stringify(v)}`).join('\n');
+                return `\n\n━━━ SHARED BLACKBOARD ━━━\n${lines}`;
+            } catch(e) { return ''; }
+        })();
 
         // Coordinator: bot with lexicographically smallest name among all connected bots is coordinator
         const allBotIds = [...this.bots.keys()].sort();
@@ -572,7 +607,7 @@ Do NOT return any action other than chat.`;
 
         let prompt = `You are a Minecraft AI bot named ${botId}.
 ${isSystemFailure ? `SYSTEM FEEDBACK (previous action result): "${data.message}"` : `${data.username === 'TaskSystem' ? `TASK INSTRUCTION` : `User '${data.username}' said`}: "${data.message}"`}
-Current Environment: ${JSON.stringify(data.environment)}${taskContext}${otherBotsContext}${coordinatorNote}${endDimNote}
+Current Environment: ${JSON.stringify(data.environment)}${taskContext}${currentQueueContext}${otherBotsContext}${blackboardContext}${coordinatorNote}${endDimNote}
 
 ━━━ CORE RULES ━━━
 *CRITICAL*: Respond ONLY with a valid JSON array of action objects. No prose, no explanations.
@@ -633,6 +668,8 @@ Current Environment: ${JSON.stringify(data.environment)}${taskContext}${otherBot
 *CRITICAL*: If you need an item another bot might have, ask them before collecting it yourself.
 [{"action": "ask_bot", "target": "AI_Bot_02", "message": "Do you have cooked_beef? I'm hungry."}]  -- relay a question/request to another bot
 [{"action": "give", "target": "AI_Bot_02", "item": "cooked_beef", "quantity": 5}]               -- give item to another bot (they must be nearby)
+[{"action": "blackboard_set", "key": "target_area", "value": "cave_north"}]  -- write shared key to blackboard (all bots can read it)
+[{"action": "blackboard_get", "key": "target_area"}]                          -- read shared key from blackboard
 
 ━━━ INVENTORY MANAGEMENT ━━━
 [{"action": "shredder_add", "target": "granite"}]     -- add item to auto-shredder junk list (auto-dropped when inventory full)
@@ -647,6 +684,17 @@ Current Environment: ${JSON.stringify(data.environment)}${taskContext}${otherBot
 *CRITICAL*: Do NOT mark a task complete just because an action ran — verify the result matches the task description.
 *CRITICAL*: If a task is confirmed complete, the system advances automatically. Do NOT repeat completed tasks.
 [{"action": "set_tasks", "tasks": [{"description": "step 1"}, {"description": "step 2"}]}]   -- Create sequential tasks to solve an abstract user request like "kill the ender dragon". When using this, the bot will automatically switch to TASK MODE and execute them sequentially.
+
+━━━ INTERRUPT / QUEUE CONTROL ━━━
+Every action array may carry a top-level "queue_op" field to control how it interacts with the current task:
+  "queue_op": "replace"  -- (DEFAULT) cancel current task and start this one immediately
+  "queue_op": "append"   -- add these actions to the END of the current queue (don't interrupt)
+  "queue_op": "ignore"   -- silently discard if the bot is already executing something
+*GUIDANCE*: Use "append" when the user asks to do something AFTER the current task finishes.
+            Use "ignore" for low-priority background checks when the bot is already busy.
+            Use "replace" (default) when the user gives a new urgent instruction.
+Example: [{"action": "collect", "target": "oak_log", "quantity": 16}, {"queue_op": "append"}]
+Note: "queue_op" is a meta-field on the array itself; place it as a separate object at the END of the array.
 
 ━━━ BOSS DEFEAT SEQUENCES TEMPLATES (use multi-action arrays) ━━━
 *CRITICAL*: These sequences are TEMPLATES. You must SKIP steps if the Environment Context shows they are already complete (e.g. do not craft eyes or explore for a stronghold if an end_portal_frame is already nearby).
@@ -770,10 +818,17 @@ BLAZE (fire resistance): brew(fire_resistance) → navigate_portal(nether) → g
                 return;
             }
 
+            // Bug Fix 2: Extract the optional queue_op meta-object from the action array.
+            // The LLM may append {"queue_op": "append"|"replace"|"ignore"} as the last element.
+            const VALID_QUEUE_OPS = new Set(['replace', 'append', 'ignore']);
+            const queueOpEntry = sanitizedActions.find(a => !a.action && a.queue_op && VALID_QUEUE_OPS.has(a.queue_op));
+            const resolvedQueueOp = queueOpEntry ? queueOpEntry.queue_op : 'replace';
+            const actionsWithoutMeta = sanitizedActions.filter(a => a.action); // strip meta objects
+
             // Send the full sanitized array, including 'stop', to the bot actuator
             // so it can clear its current goals if 'stop' is part of a chained command.
-            if (sanitizedActions.length > 0) {
-                 safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: sanitizedActions });
+            if (actionsWithoutMeta.length > 0) {
+                 safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: actionsWithoutMeta, queue_op: resolvedQueueOp });
             }
         }
 
@@ -859,11 +914,19 @@ BLAZE (fire resistance): brew(fire_resistance) → navigate_portal(nether) → g
             existingProcess.kill('SIGKILL');
         }
 
+        // Bug Fix 7: Exponential backoff — prevents rapid crash loops on persistent errors
+        // (e.g. ECONNRESET from server overload or invalid packet sequences).
+        // Delays: 5s → 10s → 20s → 30s (capped). Resets to 5s on successful spawn.
+        const attempt = (this.restartAttempts.get(botId) || 0) + 1;
+        this.restartAttempts.set(botId, attempt);
+        const delayMs = Math.min(5000 * Math.pow(2, attempt - 1), 30000);
+        console.log(`[AgentManager] Scheduling restart for ${botId} in ${delayMs}ms (attempt ${attempt}).`);
+
         const connOpts = this.botConnOptions.get(botId) || {};
         setTimeout(() => {
             console.log(`[AgentManager] Restarting ${botId}...`);
             this.startBot(botId, { ...connOpts, isRestart: true });
-        }, 5000); // Increased delay to prevent rapid crash loops
+        }, delayMs);
     }
 
     restartBot(botId) {

@@ -144,6 +144,60 @@ class WebUIServer {
             } catch (e) { res.json([]); }
         });
 
+        // ─── Safe Zones API (Change 3) ────────────────────────────────────────
+
+        const SAFE_ZONES_FILE = path.join(process.cwd(), 'data', 'safezones.json');
+
+        function _loadSafeZonesWeb() {
+            try {
+                if (!fs.existsSync(SAFE_ZONES_FILE)) return [];
+                return JSON.parse(fs.readFileSync(SAFE_ZONES_FILE, 'utf8'));
+            } catch(e) { return []; }
+        }
+
+        function _saveSafeZonesWeb(zones) {
+            try {
+                const dir = path.dirname(SAFE_ZONES_FILE);
+                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+                fs.writeFileSync(SAFE_ZONES_FILE, JSON.stringify(zones, null, 2));
+            } catch(e) {}
+        }
+
+        // GET /api/safezones — return all safe zones
+        this.app.get('/api/safezones', (req, res) => {
+            res.json(_loadSafeZonesWeb());
+        });
+
+        // POST /api/safezones — add a safe zone
+        this.app.post('/api/safezones', (req, res) => {
+            const { name, minX, minY, minZ, maxX, maxY, maxZ, dimension } = req.body || {};
+            if (!name) return res.status(400).json({ error: 'name required' });
+            if (minX === undefined || minY === undefined || minZ === undefined ||
+                maxX === undefined || maxY === undefined || maxZ === undefined) {
+                return res.status(400).json({ error: 'minX, minY, minZ, maxX, maxY, maxZ required' });
+            }
+            const zones = _loadSafeZonesWeb();
+            if (zones.some(z => z.name === name)) {
+                return res.status(409).json({ error: `Safe zone '${name}' already exists` });
+            }
+            zones.push({ name, minX: Number(minX), minY: Number(minY), minZ: Number(minZ),
+                         maxX: Number(maxX), maxY: Number(maxY), maxZ: Number(maxZ),
+                         dimension: dimension || null });
+            _saveSafeZonesWeb(zones);
+            res.json({ ok: true, name });
+        });
+
+        // DELETE /api/safezones/:name — remove a safe zone by name
+        this.app.delete('/api/safezones/:name', (req, res) => {
+            const { name } = req.params;
+            let zones = _loadSafeZonesWeb();
+            const before = zones.length;
+            zones = zones.filter(z => z.name !== name);
+            if (zones.length === before) return res.status(404).json({ error: `Safe zone '${name}' not found` });
+            _saveSafeZonesWeb(zones);
+            res.json({ ok: true });
+        });
+
         // DELETE /api/waypoints/:name
         this.app.delete('/api/waypoints/:name', (req, res) => {
             try {

@@ -1,0 +1,175 @@
+package com.forgeaip.auxmod.client;
+
+import com.forgeaip.auxmod.AuxMod;
+import com.forgeaip.auxmod.ForgeAIPConfig;
+import com.forgeaip.auxmod.network.OrchestratorClient;
+import com.mojang.blaze3d.platform.InputConstants;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.phys.Vec3;
+import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.client.event.*;
+import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.event.entity.player.PlayerEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+import org.lwjgl.glfw.GLFW;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Client-side event handlers: keybind registration, tick-based entity tracking,
+ * and login/logout lifecycle management for the OrchestratorClient.
+ */
+@Mod.EventBusSubscriber(modid = AuxMod.MOD_ID, value = Dist.CLIENT)
+public class ClientEvents {
+
+    // F8 = toggle HUD, F9 = open Macro screen
+    public static KeyMapping HUD_TOGGLE_KEY;
+    public static KeyMapping MACRO_SCREEN_KEY;
+
+    private static int entityTrackTick = 0;
+    private static final int ENTITY_TRACK_INTERVAL = 100; // every 5 seconds (20 ticks/s)
+
+    // -------------------------------------------------------------------------
+    // Keybind registration (mod event bus — handled in AuxMod constructor)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Must be called from the mod event bus during FMLClientSetupEvent (or
+     * RegisterKeyMappingsEvent). We expose static fields so AuxMod can call this.
+     */
+    public static void registerKeyMappings(RegisterKeyMappingsEvent event) {
+        HUD_TOGGLE_KEY = new KeyMapping(
+                "key.forgeaip.hud_toggle",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_F8,
+                "key.categories.forgeaip"
+        );
+        MACRO_SCREEN_KEY = new KeyMapping(
+                "key.forgeaip.macro_screen",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_F9,
+                "key.categories.forgeaip"
+        );
+        event.register(HUD_TOGGLE_KEY);
+        event.register(MACRO_SCREEN_KEY);
+        AuxMod.LOGGER.info("[ForgeAIP] Key mappings registered (F8=HUD, F9=Macros).");
+    }
+
+    // -------------------------------------------------------------------------
+    // Key input handling
+    // -------------------------------------------------------------------------
+
+    @SubscribeEvent
+    public static void onKeyInput(InputEvent.Key event) {
+        if (HUD_TOGGLE_KEY != null && HUD_TOGGLE_KEY.consumeClick()) {
+            BotStatusHUD.toggleVisible();
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.player != null) {
+                mc.player.displayClientMessage(
+                        net.minecraft.network.chat.Component.literal(
+                                "[ForgeAIP] HUD " + (BotStatusHUD.isVisible() ? "enabled" : "disabled")),
+                        true);
+            }
+        }
+        if (MACRO_SCREEN_KEY != null && MACRO_SCREEN_KEY.consumeClick()) {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.screen == null) {
+                mc.setScreen(new MacroScreen());
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Client tick — entity tracking
+    // -------------------------------------------------------------------------
+
+    @SubscribeEvent
+    public static void onClientTick(TickEvent.ClientTickEvent event) {
+        if (event.phase != TickEvent.Phase.END) return;
+        if (!ForgeAIPConfig.CLIENT.entityTrackingEnabled.get()) return;
+
+        entityTrackTick++;
+        if (entityTrackTick < ENTITY_TRACK_INTERVAL) return;
+        entityTrackTick = 0;
+
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) return;
+        if (!OrchestratorClient.getInstance().isConnected()) return;
+
+        try {
+            Vec3 playerPos = mc.player.position();
+            String dimension = mc.level.dimension().location().toString();
+            String playerName = mc.player.getName().getString();
+
+            List<Map<String, Object>> entities = new ArrayList<>();
+            for (Entity entity : mc.level.entitiesForRendering()) {
+                if (entity == mc.player) continue;
+                double dist = entity.distanceTo(mc.player);
+                if (dist > 64) continue;
+
+                Map<String, Object> e = new HashMap<>();
+                e.put("type", entity.getType().getDescriptionId());
+                e.put("name", entity.getName().getString());
+                e.put("x", Math.round(entity.getX() * 10.0) / 10.0);
+                e.put("y", Math.round(entity.getY() * 10.0) / 10.0);
+                e.put("z", Math.round(entity.getZ() * 10.0) / 10.0);
+                entities.add(e);
+            }
+
+            // Build JSON manually (no Gson dependency)
+            StringBuilder sb = new StringBuilder();
+            sb.append("{\"playerName\":\"").append(escapeJson(playerName)).append("\"");
+            sb.append(",\"position\":{\"x\":").append(Math.round(playerPos.x * 10.0) / 10.0)
+              .append(",\"y\":").append(Math.round(playerPos.y * 10.0) / 10.0)
+              .append(",\"z\":").append(Math.round(playerPos.z * 10.0) / 10.0).append("}");
+            sb.append(",\"dimension\":\"").append(escapeJson(dimension)).append("\"");
+            sb.append(",\"nearbyEntities\":[");
+            for (int i = 0; i < entities.size(); i++) {
+                Map<String, Object> e = entities.get(i);
+                if (i > 0) sb.append(",");
+                sb.append("{\"type\":\"").append(escapeJson((String) e.get("type"))).append("\"");
+                sb.append(",\"name\":\"").append(escapeJson((String) e.get("name"))).append("\"");
+                sb.append(",\"x\":").append(e.get("x"));
+                sb.append(",\"y\":").append(e.get("y"));
+                sb.append(",\"z\":").append(e.get("z")).append("}");
+            }
+            sb.append("]}");
+
+            OrchestratorClient.getInstance().postJson("/api/entity_updates", sb.toString());
+        } catch (Exception ex) {
+            AuxMod.LOGGER.debug("[ForgeAIP] Entity tracking error: {}", ex.getMessage());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Login / logout lifecycle
+    // -------------------------------------------------------------------------
+
+    @SubscribeEvent
+    public static void onPlayerLogin(ClientPlayerNetworkEvent.LoggingIn event) {
+        AuxMod.LOGGER.info("[ForgeAIP] Player logged in — connecting to orchestrator.");
+        OrchestratorClient.getInstance().connect();
+    }
+
+    @SubscribeEvent
+    public static void onPlayerLogout(ClientPlayerNetworkEvent.LoggingOut event) {
+        AuxMod.LOGGER.info("[ForgeAIP] Player logged out — disconnecting from orchestrator.");
+        OrchestratorClient.getInstance().disconnect();
+    }
+
+    // -------------------------------------------------------------------------
+    // Utilities
+    // -------------------------------------------------------------------------
+
+    private static String escapeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+    }
+}

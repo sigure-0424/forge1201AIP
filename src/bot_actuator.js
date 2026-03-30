@@ -730,6 +730,20 @@ bot.on('spawn', async () => {
         actionQueue.push(...pending);
     }
     _pendingIpcActions = [];
+
+    // Bug Fix 10: Restore checkpoint — if the bot restarted after a crash/disconnect
+    // and there are no buffered IPC actions (no new instructions yet), attempt to
+    // resume the previous task queue. Skip restore on first-ever spawn.
+    if (actionQueue.length === 0) {
+        const checkpoint = _loadQueueCheckpoint();
+        if (checkpoint) {
+            console.log(`[Actuator] Resuming ${checkpoint.length} checkpointed action(s) after restart.`);
+            bot.chat(`[System] Resuming ${checkpoint.length} task(s) from before disconnect.`);
+            actionQueue.push(...checkpoint);
+            _clearQueueCheckpoint();
+        }
+    }
+
     if (actionQueue.length > 0) processActionQueue();
 
     // Death Recovery: check for gravestone mod death-marker item in inventory.
@@ -1187,7 +1201,8 @@ function getEnvironmentContext() {
         has_sword: inventoryItems.some(i => i.name.endsWith('_sword')),
         nearby_blocks: nearbyBlocks,
         nearby_structures: nearbyStructures,
-        nearby_entities: entitySummary
+        nearby_entities: entitySummary,
+        blackboard: _readBlackboard()
     };
 }
 
@@ -1324,6 +1339,132 @@ let movements = null; // initialized in 'spawn'
 // Issue 6: _inStopMode prevents auto-idle-combat loop after explicit stop.
 // Cleared on any new EXECUTE_ACTION that isn't pure stop.
 let _inStopMode = false;
+
+// ─── Bug Fix 10: Task Queue Checkpoint ────────────────────────────────────────
+// Persist the action queue to disk so tasks survive ECONNRESET/crash restarts.
+// Only resumable, side-effect-free action types are checkpointed (navigation,
+// collection, combat). One-shot destructive actions (give, smelt, craft) are
+// excluded because replaying them after a partial execution would be incorrect.
+const QUEUE_CHECKPOINT_FILE = path.join(process.cwd(), 'data', `queue_checkpoint_${botId}.json`);
+const NON_RESUMABLE_ACTIONS = new Set(['give', 'smelt', 'brew', 'enchant', 'activate_end_portal', 'place_pattern', 'place', 'sleep', 'find_land', 'find_and_equip', 'loot_chest_special']);
+
+// ─── Blackboard (Change 2) ────────────────────────────────────────────────────
+const BLACKBOARD_FILE = path.join(process.cwd(), 'data', 'blackboard.json');
+
+function _readBlackboard() {
+    try {
+        if (!fs.existsSync(BLACKBOARD_FILE)) return {};
+        return JSON.parse(fs.readFileSync(BLACKBOARD_FILE, 'utf8'));
+    } catch(e) { return {}; }
+}
+
+function _writeBlackboard(data) {
+    try {
+        const dir = path.dirname(BLACKBOARD_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(BLACKBOARD_FILE, JSON.stringify(data, null, 2));
+    } catch(e) {}
+}
+
+// ─── Safe Zones (Change 3) ────────────────────────────────────────────────────
+const SAFE_ZONES_FILE = path.join(process.cwd(), 'data', 'safezones.json');
+
+function _loadSafeZones() {
+    try {
+        if (!fs.existsSync(SAFE_ZONES_FILE)) return [];
+        return JSON.parse(fs.readFileSync(SAFE_ZONES_FILE, 'utf8'));
+    } catch(e) { return []; }
+}
+
+function _isInSafeZone(pos, dimension) {
+    try {
+        const zones = _loadSafeZones();
+        for (const zone of zones) {
+            if (zone.dimension && zone.dimension !== dimension) continue;
+            if (pos.x >= zone.minX && pos.x <= zone.maxX &&
+                pos.y >= zone.minY && pos.y <= zone.maxY &&
+                pos.z >= zone.minZ && pos.z <= zone.maxZ) {
+                return true;
+            }
+        }
+    } catch(e) {}
+    return false;
+}
+
+function _saveQueueCheckpoint(queue) {
+    try {
+        const resumable = queue.filter(a => a && a.action && !NON_RESUMABLE_ACTIONS.has(a.action));
+        if (resumable.length === 0) {
+            // Nothing worth persisting — clear stale checkpoint
+            if (fs.existsSync(QUEUE_CHECKPOINT_FILE)) fs.unlinkSync(QUEUE_CHECKPOINT_FILE);
+            return;
+        }
+        const dir = path.dirname(QUEUE_CHECKPOINT_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(QUEUE_CHECKPOINT_FILE, JSON.stringify({ savedAt: new Date().toISOString(), queue: resumable }, null, 2));
+    } catch (e) { /* non-fatal */ }
+}
+
+function _loadQueueCheckpoint() {
+    try {
+        if (!fs.existsSync(QUEUE_CHECKPOINT_FILE)) return null;
+        const raw = JSON.parse(fs.readFileSync(QUEUE_CHECKPOINT_FILE, 'utf8'));
+        // Only restore checkpoints that are less than 10 minutes old
+        const age = Date.now() - new Date(raw.savedAt).getTime();
+        if (age > 10 * 60 * 1000) {
+            fs.unlinkSync(QUEUE_CHECKPOINT_FILE);
+            return null;
+        }
+        return Array.isArray(raw.queue) && raw.queue.length > 0 ? raw.queue : null;
+    } catch (e) { return null; }
+}
+
+function _clearQueueCheckpoint() {
+    try { if (fs.existsSync(QUEUE_CHECKPOINT_FILE)) fs.unlinkSync(QUEUE_CHECKPOINT_FILE); } catch (e) {}
+}
+
+// ─── Boat Auto-Selection (Change 1) ──────────────────────────────────────────
+// Returns true if the straight-line path to (destX, destZ) crosses >20 consecutive
+// water blocks, the destination is >40 blocks away, and the bot is not in End/Nether.
+function _shouldUseBoat(destX, destZ) {
+    try {
+        if (!bot.entity) return false;
+        const dim = bot.game?.dimension || 'overworld';
+        if (dim === 'the_nether' || dim === 'minecraft:the_nether' ||
+            dim === 'the_end' || dim === 'minecraft:the_end') {
+            return false;
+        }
+        const cx = bot.entity.position.x, cz = bot.entity.position.z;
+        const dx = destX - cx, dz = destZ - cz;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist <= 40) return false;
+        // Sample every 4 blocks along the straight-line path
+        const steps = Math.floor(dist / 4);
+        if (steps === 0) return false;
+        let consecutive = 0;
+        let maxConsecutive = 0;
+        const waterBlockId = bot.registry.blocksByName['water']?.id;
+        for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const sx = cx + dx * t;
+            const sz = cz + dz * t;
+            // Sample at the bot's current Y and Y-1 to detect water surface
+            const bAt = bot.blockAt(new Vec3(Math.floor(sx), Math.floor(bot.entity.position.y), Math.floor(sz)));
+            const bBelow = bot.blockAt(new Vec3(Math.floor(sx), Math.floor(bot.entity.position.y) - 1, Math.floor(sz)));
+            const isWater = (b) => b && (b.name === 'water' || b.name === 'flowing_water' ||
+                                         (waterBlockId !== undefined && b.type === waterBlockId));
+            if (isWater(bAt) || isWater(bBelow)) {
+                consecutive++;
+                if (consecutive > maxConsecutive) maxConsecutive = consecutive;
+            } else {
+                consecutive = 0;
+            }
+        }
+        return maxConsecutive > 20;
+    } catch(e) {
+        return false;
+    }
+}
 
 // ─── Auto-Shredder ────────────────────────────────────────────────────────────
 const JUNK_LIST_FILE = path.join(process.cwd(), 'data', 'junk_list.json');
@@ -2918,6 +3059,37 @@ async function processActionQueue() {
                 // step takes 32s; 120s gives 3.7× safety margin without masking real hangs.
                 const wpTimeout = Math.max(timeoutMs, 120000);
 
+                // Change 1: Increase liquidCost to discourage long-distance water pathfinding.
+                if (movements) {
+                    movements.liquidCost = 8;
+                    bot.pathfinder.setMovements(movements);
+                }
+
+                // Change 1: Boat auto-selection — if the path crosses >20 consecutive water blocks
+                // and the destination is >40 blocks away, use boat action instead.
+                if (destX !== undefined && destZ !== undefined && _shouldUseBoat(destX, destZ)) {
+                    const hasBoat = bot.inventory.items().some(i => i.name.includes('boat'));
+                    const hasOakPlanks = bot.inventory.items().some(i => i.name === 'oak_planks');
+                    const hasOakLog = bot.inventory.items().some(i => i.name === 'oak_log' || i.name.endsWith('_log'));
+                    const canCraftBoat = hasBoat || hasOakPlanks || hasOakLog;
+                    if (canCraftBoat) {
+                        console.log(`[Actuator] goto: detected water-heavy path to (${Math.round(destX)},${Math.round(destZ)}). Switching to boat action.`);
+                        bot.chat('[System] Detected large water body ahead. Using boat for travel.');
+                        actionQueue.unshift({ action: 'boat', x: destX, z: destZ, timeout: action.timeout || 120 });
+                        continue;
+                    }
+                }
+
+                // Change 3: Warn if goto destination is inside a safe zone.
+                if (destX !== undefined && destZ !== undefined && bot.entity) {
+                    const currentDimForSZ = bot.game?.dimension || 'overworld';
+                    const destPosForSZ = new Vec3(destX, destY !== undefined ? destY : bot.entity.position.y, destZ);
+                    if (_isInSafeZone(destPosForSZ, currentDimForSZ)) {
+                        console.log(`[Actuator] goto: destination (${Math.round(destX)}, ${Math.round(destZ)}) is inside a safe zone. Movement allowed but warning issued.`);
+                        bot.chat('[System] Warning: destination is inside a safe zone.');
+                    }
+                }
+
                 if (destY !== undefined) {
                     bot.chat(`[System] Moving to X:${Math.round(destX)}, Y:${destY}, Z:${Math.round(destZ)}.`);
                     const curY = bot.entity.position.y;
@@ -3381,6 +3553,14 @@ async function processActionQueue() {
                                 console.log(`[collect] 3 consecutive protected digs — skipping rest of r=${pass.maxDistance} pass.`);
                                 consecutiveProtected = 0;
                                 break;
+                            }
+                            // Change 3: Skip blocks inside safe zones.
+                            {
+                                const currentDimForCollect = bot.game?.dimension || 'overworld';
+                                if (_isInSafeZone(blockPos, currentDimForCollect)) {
+                                    console.log(`[collect] Skipping block at (${blockPos.x},${blockPos.y},${blockPos.z}) — inside safe zone.`);
+                                    continue;
+                                }
                             }
                             triedSet.add(`${blockPos.x},${blockPos.z}`);
 
@@ -4660,12 +4840,37 @@ async function processActionQueue() {
                             const check = setInterval(() => {
                                 if (bot.game.dimension !== currentDim) {
                                     clearInterval(check);
-                                    bot.setControlState('forward', false);
-                                    try { bot.pathfinder.setGoal(null); } catch (e) {} // Stop previous goals so we don't pathfind to overworld coords
+                                    // Bug Fix 1: Hard-flush all movement state on dimension change.
+                                    // clearControlStates() stops every key (forward, sprint, jump, sneak,
+                                    // back, left, right) so the bot cannot drift on the obsidian platform
+                                    // or in the End void while waiting for chunks to load.
+                                    bot.clearControlStates();
+                                    try { bot.pathfinder.setGoal(null); } catch (e) {}
                                     resolve();
                                 }
                             }, 500);
                         }), 12000, 'portal teleport');
+
+                        // Bug Fix 1: Give the new dimension time to load chunks and for the bot to
+                        // land on the obsidian platform (End) or Nether floor before any further
+                        // pathfinding. Without this, the pathfinder immediately tries to compute
+                        // routes using stale/unloaded chunk data, producing phantom movement.
+                        const newDim = bot.game.dimension;
+                        const enteringEnd = newDim === 'the_end' || newDim === 'minecraft:the_end';
+                        const settleMs = enteringEnd ? 2000 : 1000;
+                        await new Promise(r => setTimeout(r, settleMs));
+                        // Extra guard: if still airborne after the settle delay (e.g. spawning above
+                        // the obsidian platform in the End), wait up to 3s more to land.
+                        if (bot.entity && !bot.entity.onGround && !bot.entity.isInWater) {
+                            let airWait = 0;
+                            while (bot.entity && !bot.entity.onGround && !bot.entity.isInWater && airWait < 3000) {
+                                await new Promise(r => setTimeout(r, 100));
+                                airWait += 100;
+                            }
+                        }
+                        // Final pathfinder flush after landing — clears any internal path state
+                        // that built up while the bot was airborne on the platform.
+                        try { bot.pathfinder.setGoal(null); bot.clearControlStates(); } catch (e) {}
 
                         // CLEAR the action queue to avoid carrying overworld coordinates or old tasks into the new dimension
                         actionQueue = [];
@@ -4679,7 +4884,7 @@ async function processActionQueue() {
                         }
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: `Entered portal. Now in ${bot.game.dimension}. Actions cleared.`, environment: getEnvironmentContext() } });
                     } catch (e) {
-                        bot.setControlState('forward', false);
+                        bot.clearControlStates();
                         try { bot.pathfinder.setGoal(null); } catch (err) {}
                         actionQueue = [];
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: `Portal transit timeout: ${e.message}`, environment: getEnvironmentContext() } });
@@ -5173,6 +5378,36 @@ async function processActionQueue() {
                 console.log(`[find_land] ${msg} inv=[${invDebug}]`);
                 process.send({ type: 'USER_CHAT', data: { username: "System", message: msg, environment: getEnvironmentContext() } });
 
+            // ── blackboard_set ────────────────────────────────────────────────
+            // Change 2: write a key/value pair to the shared blackboard file.
+            } else if (action.action === 'blackboard_set') {
+                const bbKey = action.key;
+                const bbValue = action.value;
+                if (bbKey !== undefined) {
+                    const bbData = _readBlackboard();
+                    bbData[bbKey] = bbValue;
+                    _writeBlackboard(bbData);
+                    const msg = `Blackboard: set "${bbKey}" = ${JSON.stringify(bbValue)}`;
+                    bot.chat(`[System] ${msg}`);
+                    process.send({ type: 'USER_CHAT', data: { username: 'System', message: msg, environment: getEnvironmentContext() } });
+                } else {
+                    process.send({ type: 'USER_CHAT', data: { username: 'System', message: 'blackboard_set: missing key.', environment: getEnvironmentContext() } });
+                }
+
+            // ── blackboard_get ────────────────────────────────────────────────
+            // Change 2: read a key from the shared blackboard file.
+            } else if (action.action === 'blackboard_get') {
+                const bbKey = action.key;
+                if (bbKey !== undefined) {
+                    const bbData = _readBlackboard();
+                    const bbVal = bbData.hasOwnProperty(bbKey) ? bbData[bbKey] : null;
+                    const msg = `Blackboard: "${bbKey}" = ${JSON.stringify(bbVal)}`;
+                    bot.chat(`[System] ${msg}`);
+                    process.send({ type: 'USER_CHAT', data: { username: 'System', message: msg, environment: getEnvironmentContext() } });
+                } else {
+                    process.send({ type: 'USER_CHAT', data: { username: 'System', message: 'blackboard_get: missing key.', environment: getEnvironmentContext() } });
+                }
+
             // ── stop ──────────────────────────────────────────────────────────
             } else if (action.action === 'stop') {
                 // Issue 6: explicit stop — halt everything and disable idle combat
@@ -5205,6 +5440,10 @@ async function processActionQueue() {
         await runWaitLoop();
     }
 
+    // Bug Fix 10: All actions completed normally — clear the checkpoint so stale
+    // tasks are not re-queued on the next restart.
+    _clearQueueCheckpoint();
+
     isExecuting = false;
 }
 
@@ -5224,12 +5463,35 @@ process.on('message', async (msg) => {
         let actions = msg.action;
         if (!Array.isArray(actions)) actions = [actions];
 
+        // Bug Fix 2: queue_op controls how incoming actions relate to the current queue.
+        //   replace (default) — cancel current tasks and start fresh (previous behaviour)
+        //   append            — add new actions to the end of the current queue
+        //   ignore            — do nothing if the bot is currently executing a task
+        const queueOp = (msg.queue_op || 'replace').toLowerCase();
+
         // If bot hasn't finished login/spawn yet, buffer the action
         if (!_botReady) {
             console.log(`[Actuator] Bot not ready yet — buffering ${actions.length} action(s).`);
             _pendingIpcActions.push(actions);
             return;
         }
+
+        // ── ignore: discard new actions while busy ───────────────────────────
+        if (queueOp === 'ignore' && (isExecuting || actionQueue.length > 0)) {
+            console.log(`[Actuator] queue_op=ignore: bot is busy, discarding ${actions.length} incoming action(s).`);
+            return;
+        }
+
+        // ── append: tack onto the current queue without cancelling ───────────
+        if (queueOp === 'append') {
+            _inStopMode = false;
+            actionQueue.push(...actions);
+            console.log(`[Actuator] queue_op=append: added ${actions.length} action(s). Queue length now ${actionQueue.length}.`);
+            if (!isExecuting) processActionQueue();
+            return;
+        }
+
+        // ── replace (default): cancel current tasks and start fresh ──────────
 
         // 1. Signal the running loop to stop
         const remaining = [...actionQueue];
@@ -5263,6 +5525,8 @@ process.on('message', async (msg) => {
         // 4. Fresh token + queue for the new command
         currentCancelToken = { cancelled: false };
         actionQueue.push(...actions);
+        // Bug Fix 10: Persist the incoming queue so a crash/disconnect can resume it.
+        _saveQueueCheckpoint(actionQueue);
         processActionQueue();
     }
 });
