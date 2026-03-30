@@ -124,14 +124,60 @@ class WebUIServer {
                 }
             }
 
-            if (req.body?.OLLAMA_URL)   process.env.OLLAMA_URL   = req.body.OLLAMA_URL;
+            // --- SSRF Protection for OLLAMA_URL ---
+            if (req.body?.OLLAMA_URL) {
+                try {
+                    const url = new URL(req.body.OLLAMA_URL);
+                    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+                        return res.status(400).json({ error: 'Invalid OLLAMA_URL: protocol must be http or https' });
+                    }
+
+                    const host = url.hostname.toLowerCase();
+
+                    // --- SSRF Protection Logic ---
+                    // 1. Block Cloud Metadata Services (AWS, GCP, Azure, etc.)
+                    const isMetadata =
+                        host === '169.254.169.254' ||
+                        host === '[fd00:ec2::254]' ||
+                        host.includes('metadata.google.internal') ||
+                        host.includes('instance-data') ||
+                        host.includes('169.254'); // Covers 169.254.0.0/16 Link-local range
+
+                    if (isMetadata) {
+                        return res.status(400).json({ error: 'Invalid OLLAMA_URL: access to cloud metadata service is restricted' });
+                    }
+
+                    // 2. Block sensitive internal names and patterns
+                    const isRestrictedInternal =
+                        host === 'kubernetes.default.svc' ||
+                        (host.endsWith('.internal') && !host.includes('ollama')); // Allow if user has ollama.internal
+
+                    if (isRestrictedInternal) {
+                        return res.status(400).json({ error: 'Invalid OLLAMA_URL: access to internal service is restricted' });
+                    }
+
+                } catch (e) {
+                    return res.status(400).json({ error: 'Invalid OLLAMA_URL: must be a valid URL' });
+                }
+            }
+
+            if (req.body?.OLLAMA_URL) {
+                process.env.OLLAMA_URL = req.body.OLLAMA_URL;
+                m.llm.url = req.body.OLLAMA_URL;
+            }
             if (req.body?.OLLAMA_MODEL) {
                 process.env.OLLAMA_MODEL = req.body.OLLAMA_MODEL;
                 m.llm.model = req.body.OLLAMA_MODEL;
             }
             if (req.body?.OLLAMA_API_KEY) process.env.OLLAMA_API_KEY = req.body.OLLAMA_API_KEY;
             if (req.body?.OLLAMA_AUTH_SCHEME) process.env.OLLAMA_AUTH_SCHEME = req.body.OLLAMA_AUTH_SCHEME;
-            if (req.body?.WEBUI_PORT) process.env.WEBUI_PORT = req.body.WEBUI_PORT;
+            if (req.body?.WEBUI_PORT) {
+                const port = parseInt(req.body.WEBUI_PORT);
+                if (isNaN(port) || port < 1 || port > 65535) {
+                    return res.status(400).json({ error: 'Invalid WEBUI_PORT: must be a number between 1 and 65535' });
+                }
+                process.env.WEBUI_PORT = req.body.WEBUI_PORT;
+            }
 
             res.json({ ok: true });
         });
