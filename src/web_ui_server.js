@@ -289,6 +289,17 @@ class WebUIServer {
             if (opted === 'yes') this.sentry.initSentry(process.env.SENTRY_DSN);
             res.json({ ok: true });
         });
+
+        // POST /api/entity_updates — receive entity tracking data from the aux mod
+        this.app.post('/api/entity_updates', (req, res) => {
+            if (req.body) {
+                this._broadcast({
+                    type: 'entity_update',
+                    data: req.body
+                });
+            }
+            res.json({ ok: true });
+        });
     }
 
     // ─── WebSocket ────────────────────────────────────────────────────────────

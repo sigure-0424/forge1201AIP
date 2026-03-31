@@ -206,6 +206,13 @@ public class OrchestratorClient {
         private final StringBuilder textAccumulator = new StringBuilder();
 
         @Override
+        public void onOpen(WebSocket ws) {
+            connected = true;
+            webSocket = ws;
+            ws.request(1);
+        }
+
+        @Override
         public CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
             textAccumulator.append(data);
             if (last) {
