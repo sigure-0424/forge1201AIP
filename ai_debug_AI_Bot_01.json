@@ -1,20 +1,20 @@
 {
-  "timestamp": "2026-03-31T12:38:18.164Z",
+  "timestamp": "2026-03-31T13:13:15.344Z",
   "ready": true,
   "position": {
-    "x": -384.5,
-    "y": 66,
-    "z": -532.5
+    "x": -389.5,
+    "y": 65.9,
+    "z": -536.4
   },
-  "health": 20,
-  "food": 20,
+  "health": 14,
+  "food": 15,
   "dimension": "overworld",
   "isExecuting": true,
   "actionQueue": [],
   "treeDir": null,
   "inventory": [
     {
-      "name": "unknown",
+      "name": "iron_pickaxe",
       "count": 1
     },
     {
@@ -55,7 +55,7 @@
     },
     {
       "name": "createbigcannons:flowing_molten_nethersteel",
-      "count": 15
+      "count": 20
     },
     {
       "name": "iron_pickaxe",
@@ -63,7 +63,7 @@
     },
     {
       "name": "createbigcannons:molten_cast_iron",
-      "count": 14
+      "count": 23
     },
     {
       "name": "end_stone",
@@ -95,7 +95,7 @@
     },
     {
       "name": "bone",
-      "count": 1
+      "count": 2
     },
     {
       "name": "stone_bricks",
@@ -106,47 +106,59 @@
       "count": 1
     },
     {
+      "name": "iron_shovel",
+      "count": 1
+    },
+    {
+      "name": "mossy_cobblestone",
+      "count": 2
+    },
+    {
+      "name": "gunpowder",
+      "count": 1
+    },
+    {
+      "name": "iron_axe",
+      "count": 1
+    },
+    {
+      "name": "iron_axe",
+      "count": 1
+    },
+    {
+      "name": "iron_axe",
+      "count": 1
+    },
+    {
+      "name": "iron_axe",
+      "count": 1
+    },
+    {
       "name": "iron_pickaxe",
       "count": 1
     },
     {
+      "name": "iron_axe",
+      "count": 1
+    },
+    {
+      "name": "iron_axe",
+      "count": 1
+    },
+    {
       "name": "iron_pickaxe",
       "count": 1
     },
     {
-      "name": "iron_pickaxe",
-      "count": 1
-    },
-    {
-      "name": "iron_axe",
-      "count": 1
-    },
-    {
-      "name": "iron_axe",
-      "count": 1
-    },
-    {
-      "name": "iron_axe",
-      "count": 1
-    },
-    {
-      "name": "iron_axe",
-      "count": 1
-    },
-    {
-      "name": "iron_axe",
-      "count": 1
-    },
-    {
-      "name": "iron_axe",
+      "name": "unknown",
       "count": 1
     }
   ],
   "armor": {
     "head": null,
-    "torso": null,
+    "torso": "iron_chestplate",
     "legs": "iron_leggings",
-    "feet": null,
+    "feet": "iron_boots",
     "hand": "iron_axe"
   }
 }
