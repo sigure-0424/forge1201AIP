@@ -121,7 +121,7 @@ public class MacroScreen extends Screen {
         } else {
             // Condition field
             conditionBox = new EditBox(this.font,
-                    LIST_X, addBtnY, this.width / 2 - 4, 16,
+                    LIST_X, addBtnY + 10, this.width - 20, 16,
                     Component.literal("Condition"));
             conditionBox.setHint(Component.literal("Condition (e.g. health < 6)"));
             conditionBox.setMaxLength(200);
@@ -129,13 +129,35 @@ public class MacroScreen extends Screen {
 
             // Action field
             actionBox = new EditBox(this.font,
-                    LIST_X, addBtnY + 20, this.width / 2 - 4, 16,
+                    LIST_X, addBtnY + 40, this.width - 20, 16,
                     Component.literal("Action JSON"));
             actionBox.setHint(Component.literal("Action JSON (e.g. [{\"action\":\"eat\"}])"));
             actionBox.setMaxLength(500);
             addRenderableWidget(actionBox);
 
-            // Save button
+            // Snippet buttons
+            int snippetY = addBtnY + 60;
+            addRenderableWidget(Button.builder(Component.literal("Current Pos"), btn -> {
+                if (minecraft != null && minecraft.player != null) {
+                    int px = (int) Math.round(minecraft.player.getX());
+                    int py = (int) Math.round(minecraft.player.getY());
+                    int pz = (int) Math.round(minecraft.player.getZ());
+                    actionBox.setValue(String.format("[{\"action\":\"GoalBlock\",\"x\":%d,\"y\":%d,\"z\":%d}]", px, py, pz));
+                }
+            }).pos(LIST_X, snippetY).size(70, 16).build());
+
+            addRenderableWidget(Button.builder(Component.literal("Eat"), btn -> {
+                actionBox.setValue("[{\"action\":\"equip\",\"item\":\"cooked_beef\"},{\"action\":\"eat\"}]");
+            }).pos(LIST_X + 74, snippetY).size(40, 16).build());
+
+            addRenderableWidget(Button.builder(Component.literal("Follow"), btn -> {
+                if (minecraft != null && minecraft.player != null) {
+                    actionBox.setValue(String.format("[{\"action\":\"GoalFollow\",\"entity\":\"%s\"}]", minecraft.player.getName().getString()));
+                }
+            }).pos(LIST_X + 118, snippetY).size(50, 16).build());
+
+            // Save / Cancel buttons
+            int btnY = addBtnY + 80;
             addRenderableWidget(Button.builder(Component.literal("Save"), btn -> {
                 String cond = conditionBox.getValue().trim();
                 String act = actionBox.getValue().trim();
@@ -144,13 +166,12 @@ public class MacroScreen extends Screen {
                 }
                 addFormVisible = false;
                 buildWidgets();
-            }).pos(LIST_X, addBtnY + 40).size(50, 16).build());
+            }).pos(LIST_X, btnY).size(50, 16).build());
 
-            // Cancel button
             addRenderableWidget(Button.builder(Component.literal("Cancel"), btn -> {
                 addFormVisible = false;
                 buildWidgets();
-            }).pos(LIST_X + 54, addBtnY + 40).size(50, 16).build());
+            }).pos(LIST_X + 54, btnY).size(50, 16).build());
         }
     }
 
@@ -239,8 +260,8 @@ public class MacroScreen extends Screen {
         // Add form labels
         if (addFormVisible) {
             int addBtnY = LIST_Y + MAX_VISIBLE_ROWS * ROW_HEIGHT + 4;
-            graphics.drawString(this.font, "Condition:", LIST_X, addBtnY - 10, 0xFFCCCCCC, false);
-            graphics.drawString(this.font, "Action JSON:", LIST_X, addBtnY + 10, 0xFFCCCCCC, false);
+            graphics.drawString(this.font, "Condition:", LIST_X, addBtnY, 0xFFCCCCCC, false);
+            graphics.drawString(this.font, "Action JSON:", LIST_X, addBtnY + 30, 0xFFCCCCCC, false);
         }
 
         super.render(graphics, mouseX, mouseY, partialTick);
