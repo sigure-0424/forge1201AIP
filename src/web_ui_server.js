@@ -390,7 +390,7 @@ class WebUIServer {
     // ─── Start ────────────────────────────────────────────────────────────────
 
     start(port = 3000) {
-        this.server.listen(port, '127.0.0.1', () => {
+        this.server.listen(port, () => {
             console.log(`[WebUI] Dashboard available at http://localhost:${port}`);
         });
         this.server.on('error', (e) => {
