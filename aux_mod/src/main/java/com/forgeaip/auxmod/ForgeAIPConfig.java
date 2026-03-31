@@ -21,6 +21,16 @@ public class ForgeAIPConfig {
     public final ForgeConfigSpec.IntValue hudY;
     public final ForgeConfigSpec.BooleanValue entityTrackingEnabled;
 
+    // Launcher settings — used by SystemLauncherManager to start node index.js
+    public final ForgeConfigSpec.ConfigValue<String> launcherProjectDir;
+    public final ForgeConfigSpec.ConfigValue<String> launcherNodePath;
+    public final ForgeConfigSpec.ConfigValue<String> launcherOllamaUrl;
+    public final ForgeConfigSpec.ConfigValue<String> launcherOllamaModel;
+    public final ForgeConfigSpec.ConfigValue<String> launcherOllamaApiKey;
+    public final ForgeConfigSpec.ConfigValue<String> launcherMcHost;
+    public final ForgeConfigSpec.IntValue             launcherMcPort;
+    public final ForgeConfigSpec.ConfigValue<String> launcherBotNames;
+
     public ForgeAIPConfig(ForgeConfigSpec.Builder builder) {
         builder.comment("ForgeAIP Auxiliary Mod Configuration")
                .push("general");
@@ -50,6 +60,41 @@ public class ForgeAIPConfig {
         entityTrackingEnabled = builder
                 .comment("Whether out-of-sight entity tracking updates are sent to the orchestrator")
                 .define("entityTrackingEnabled", true);
+
+        builder.pop();
+        builder.push("launcher");
+
+        launcherProjectDir = builder
+                .comment("Absolute path to the forge1201AIP project directory (contains index.js)")
+                .define("projectDir", "");
+
+        launcherNodePath = builder
+                .comment("Path to the node executable (default: 'node' if on PATH)")
+                .define("nodePath", "node");
+
+        launcherOllamaUrl = builder
+                .comment("LLM endpoint URL passed as OLLAMA_URL to the bot system")
+                .define("ollamaUrl", "http://localhost:11434/api/generate");
+
+        launcherOllamaModel = builder
+                .comment("LLM model name passed as OLLAMA_MODEL")
+                .define("ollamaModel", "gpt-oss:20b-cloud");
+
+        launcherOllamaApiKey = builder
+                .comment("LLM API key passed as OLLAMA_API_KEY (leave empty if not needed)")
+                .define("ollamaApiKey", "");
+
+        launcherMcHost = builder
+                .comment("Minecraft server host the bots will connect to")
+                .define("mcHost", "localhost");
+
+        launcherMcPort = builder
+                .comment("Minecraft server port")
+                .defineInRange("mcPort", 25565, 1, 65535);
+
+        launcherBotNames = builder
+                .comment("Comma-separated list of bot names to start (e.g. AI_Bot_01,AI_Bot_02)")
+                .define("botNames", "AI_Bot_01");
 
         builder.pop();
     }

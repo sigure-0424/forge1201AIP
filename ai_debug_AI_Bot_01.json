@@ -1,19 +1,24 @@
 {
-  "timestamp": "2026-03-30T17:58:07.151Z",
+  "timestamp": "2026-03-31T07:02:20.673Z",
   "ready": true,
   "position": {
-    "x": 1372.5,
-    "y": 8,
-    "z": 835.5
+    "x": 97.1,
+    "y": 49,
+    "z": 0.5
   },
   "health": 20,
-  "food": 20,
-  "isExecuting": true,
+  "food": 17,
+  "dimension": "the_end",
+  "isExecuting": false,
   "actionQueue": [],
   "treeDir": null,
   "inventory": [
     {
       "name": "unknown",
+      "count": 1
+    },
+    {
+      "name": "ender_pearl",
       "count": 1
     },
     {
@@ -50,7 +55,7 @@
     },
     {
       "name": "createbigcannons:flowing_molten_nethersteel",
-      "count": 12
+      "count": 15
     },
     {
       "name": "iron_pickaxe",
@@ -101,23 +106,23 @@
       "count": 1
     },
     {
-      "name": "iron_axe",
-      "count": 1
-    },
-    {
-      "name": "iron_axe",
-      "count": 1
-    },
-    {
-      "name": "iron_axe",
-      "count": 1
-    },
-    {
       "name": "iron_pickaxe",
       "count": 1
     },
     {
       "name": "iron_pickaxe",
+      "count": 1
+    },
+    {
+      "name": "iron_axe",
+      "count": 1
+    },
+    {
+      "name": "iron_axe",
+      "count": 1
+    },
+    {
+      "name": "iron_axe",
       "count": 1
     },
     {

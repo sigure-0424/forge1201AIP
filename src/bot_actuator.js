@@ -934,6 +934,7 @@ bot.on('spawn', async () => {
                 },
                 health: Math.round(bot.health),
                 food: Math.round(bot.food),
+                dimension: bot.game?.dimension || 'overworld',
                 isExecuting,
                 actionQueue: [...actionQueue],
                 treeDir: _treeDir,
@@ -2365,7 +2366,11 @@ async function runWaitLoop() {
         const hostile = findNearestHostile(16);
         if (hostile && hostile.isValid) {
             const dist = bot.entity.position.distanceTo(hostile.position);
-            try { await bot.lookAt(hostile.position.offset(0, (hostile.height || 1.8) * 0.5, 0)); } catch(e) {}
+            // Don't look at non-aggro'd Endermen — eye contact triggers aggro
+            const isNonAggroEnderman = (hostile.name || '').toLowerCase() === 'enderman' && !_aggroedNeutrals.has(hostile.id);
+            if (!isNonAggroEnderman) {
+                try { await bot.lookAt(hostile.position.offset(0, (hostile.height || 1.8) * 0.5, 0)); } catch(e) {}
+            }
             if (dist <= 3.5) {
                 bot.attack(hostile);
                 equipBestWeapon().catch(() => {});

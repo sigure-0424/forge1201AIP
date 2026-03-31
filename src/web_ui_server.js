@@ -37,12 +37,17 @@ class WebUIServer {
     _setupRoutes() {
         const m = this.manager;
 
-        // GET /api/bots — list all bots with latest status
+        // GET /api/bots — list all bots with latest status (includes restarting bots as offline)
         this.app.get('/api/bots', (req, res) => {
             const bots = [];
-            // Active bots
+            const seen = new Set();
             for (const [id] of m.bots.entries()) {
+                seen.add(id);
                 bots.push(this._botSummary(id, true));
+            }
+            // Also include known bots that are restarting (in botConnOptions but not yet spawned)
+            for (const [id] of m.botConnOptions.entries()) {
+                if (!seen.has(id)) bots.push(this._botSummary(id, false));
             }
             res.json(bots);
         });
@@ -293,14 +298,23 @@ class WebUIServer {
             this.clients.add(ws);
 
             // Send initial snapshot of all bots + their chat logs
+            // Includes bots currently restarting (in botConnOptions but not yet spawned) as offline
             const snapshot = {
                 type: 'init',
                 bots: [],
                 logs: {}
             };
+            const seen = new Set();
             for (const [id] of this.manager.bots.entries()) {
+                seen.add(id);
                 snapshot.bots.push(this._botSummary(id, true));
                 snapshot.logs[id] = this.manager.chatLog.get(id) || [];
+            }
+            for (const [id] of this.manager.botConnOptions.entries()) {
+                if (!seen.has(id)) {
+                    snapshot.bots.push(this._botSummary(id, false));
+                    snapshot.logs[id] = this.manager.chatLog.get(id) || [];
+                }
             }
             ws.send(JSON.stringify(snapshot));
 

@@ -28,9 +28,10 @@ import java.util.Map;
 @Mod.EventBusSubscriber(modid = AuxMod.MOD_ID, value = Dist.CLIENT)
 public class ClientEvents {
 
-    // F8 = toggle HUD, F9 = open Macro screen
+    // F8 = toggle HUD, F9 = open Macro screen, F10 = open Launcher screen
     public static KeyMapping HUD_TOGGLE_KEY;
     public static KeyMapping MACRO_SCREEN_KEY;
+    public static KeyMapping LAUNCHER_SCREEN_KEY;
 
     private static int entityTrackTick = 0;
     private static final int ENTITY_TRACK_INTERVAL = 100; // every 5 seconds (20 ticks/s)
@@ -56,9 +57,16 @@ public class ClientEvents {
                 GLFW.GLFW_KEY_F9,
                 "key.categories.forgeaip"
         );
+        LAUNCHER_SCREEN_KEY = new KeyMapping(
+                "key.forgeaip.launcher_screen",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_F10,
+                "key.categories.forgeaip"
+        );
         event.register(HUD_TOGGLE_KEY);
         event.register(MACRO_SCREEN_KEY);
-        AuxMod.LOGGER.info("[ForgeAIP] Key mappings registered (F8=HUD, F9=Macros).");
+        event.register(LAUNCHER_SCREEN_KEY);
+        AuxMod.LOGGER.info("[ForgeAIP] Key mappings registered (F8=HUD, F9=Macros, F10=Launcher).");
     }
 
     // -------------------------------------------------------------------------
@@ -81,6 +89,12 @@ public class ClientEvents {
             Minecraft mc = Minecraft.getInstance();
             if (mc.screen == null) {
                 mc.setScreen(new MacroScreen());
+            }
+        }
+        if (LAUNCHER_SCREEN_KEY != null && LAUNCHER_SCREEN_KEY.consumeClick()) {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.screen == null) {
+                mc.setScreen(new LauncherScreen());
             }
         }
     }

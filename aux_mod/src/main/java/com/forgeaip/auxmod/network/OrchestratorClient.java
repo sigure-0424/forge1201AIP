@@ -264,28 +264,50 @@ public class OrchestratorClient {
             if (type == null) return;
 
             switch (type) {
+                case "init": {
+                    // Initial snapshot sent when WebSocket connects — populate all bots at once.
+                    // Event: { type:"init", bots:[{id, online, mode, position:{x,y,z}, health, food, ...}], logs:{} }
+                    List<String> botJsons = extractJsonArray(json, "bots");
+                    for (String botJson : botJsons) {
+                        // init uses "id" field; parseBotStatus fills in all other fields
+                        String id = extractStringField(botJson, "id");
+                        if (id == null || id.isEmpty()) continue;
+                        BotStatus status = parseBotStatus(botJson);
+                        status.botId = id;
+                        botStatuses.put(id, status);
+                    }
+                    break;
+                }
                 case "bot_status": {
+                    // Event: { type:"bot_status", botId:"AI_Bot_01", data:{position:{x,y,z}, health, food, ...} }
+                    // botId is at the TOP LEVEL, not inside data.
+                    String botId = extractStringField(json, "botId");
                     String data = extractObjectField(json, "data");
-                    if (data != null) {
+                    if (botId != null && !botId.isEmpty() && data != null) {
                         BotStatus status = parseBotStatus(data);
-                        if (status != null && status.botId != null && !status.botId.isEmpty()) {
-                            botStatuses.put(status.botId, status);
-                        }
+                        status.botId = botId;
+                        botStatuses.put(botId, status);
+                    }
+                    break;
+                }
+                case "bot_connected": {
+                    // Event: { type:"bot_connected", botId:"AI_Bot_01" }
+                    // Add placeholder so the bot appears immediately (status fills in within 5s).
+                    String botId = extractStringField(json, "botId");
+                    if (botId != null && !botId.isEmpty() && !botStatuses.containsKey(botId)) {
+                        BotStatus placeholder = new BotStatus();
+                        placeholder.botId = botId;
+                        botStatuses.put(botId, placeholder);
                     }
                     break;
                 }
                 case "bot_disconnected": {
-                    String data = extractObjectField(json, "data");
-                    if (data != null) {
-                        String botId = extractStringField(data, "botId");
-                        if (botId == null) botId = extractStringField(data, "id");
-                        if (botId != null) {
-                            botStatuses.remove(botId);
-                        }
-                    }
+                    // Event: { type:"bot_disconnected", botId:"AI_Bot_01" }
+                    // botId is at the TOP LEVEL, not inside a data object.
+                    String botId = extractStringField(json, "botId");
+                    if (botId != null) botStatuses.remove(botId);
                     break;
                 }
-                // bot_connected and bot_chat are dispatched only to external listeners
                 default:
                     break;
             }
@@ -304,12 +326,22 @@ public class OrchestratorClient {
      */
     private BotStatus parseBotStatus(String json) {
         BotStatus s = new BotStatus();
+        // botId / id — caller overwrites this for event types that carry botId separately
         s.botId = firstNonNull(extractStringField(json, "botId"), extractStringField(json, "id"), "");
         s.health = extractDouble(json, "health");
         s.food = extractDouble(json, "food");
-        s.x = extractDouble(json, "x");
-        s.y = extractDouble(json, "y");
-        s.z = extractDouble(json, "z");
+        // Position is nested: { "position": { "x": ..., "y": ..., "z": ... } }
+        // Fall back to flat x/y/z for forwards-compat if structure changes.
+        String posObj = extractObjectField(json, "position");
+        if (posObj != null) {
+            s.x = extractDouble(posObj, "x");
+            s.y = extractDouble(posObj, "y");
+            s.z = extractDouble(posObj, "z");
+        } else {
+            s.x = extractDouble(json, "x");
+            s.y = extractDouble(json, "y");
+            s.z = extractDouble(json, "z");
+        }
         s.dimension = firstNonNull(extractStringField(json, "dimension"), "overworld");
         s.isExecuting = extractBoolean(json, "isExecuting");
 
@@ -322,6 +354,38 @@ public class OrchestratorClient {
             s.currentAction = extractFirstActionFromQueue(json);
         }
         return s;
+    }
+
+    /**
+     * Extracts a JSON array field and returns a list of element strings (each a raw JSON object).
+     * Only handles arrays of objects ({...}), not primitives.
+     */
+    private List<String> extractJsonArray(String json, String key) {
+        List<String> result = new ArrayList<>();
+        if (json == null) return result;
+        String search = "\"" + key + "\"";
+        int ki = json.indexOf(search);
+        if (ki < 0) return result;
+        int arrStart = json.indexOf('[', ki + search.length());
+        if (arrStart < 0) return result;
+        int arrEnd = findMatchingBracket(json, arrStart, '[', ']');
+        if (arrEnd < 0) return result;
+        String arr = json.substring(arrStart + 1, arrEnd).trim();
+        int pos = 0;
+        while (pos < arr.length()) {
+            // Skip commas and whitespace
+            while (pos < arr.length() && (arr.charAt(pos) == ',' || Character.isWhitespace(arr.charAt(pos)))) pos++;
+            if (pos >= arr.length()) break;
+            if (arr.charAt(pos) == '{') {
+                int end = findMatchingBracket(arr, pos, '{', '}');
+                if (end < 0) break;
+                result.add(arr.substring(pos, end + 1));
+                pos = end + 1;
+            } else {
+                break; // non-object element; stop
+            }
+        }
+        return result;
     }
 
     private String extractFirstActionFromQueue(String json) {

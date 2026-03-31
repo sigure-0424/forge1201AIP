@@ -603,7 +603,7 @@ Do NOT return any action other than chat.`;
             : (allBotIds.length > 1 ? `\n*NOTE*: ${allBotIds[0]} is the coordinator bot.` : '');
 
         const inTheEnd = data.environment?.dimension === 'the_end' || data.environment?.dimension === 'minecraft:the_end';
-        const endDimNote = inTheEnd ? `\n*CRITICAL*: You are in THE END dimension. ONLY use: kill(ender_dragon), goto, eat, equip, equip_armor, status. Do NOT collect, craft, smelt, brew, or attempt to gather resources — there are no useful resources in the End.` : '';
+        const endDimNote = inTheEnd ? `\n*CRITICAL*: You are in THE END dimension. Do NOT start dragon combat unless the player explicitly says to fight or kill the dragon. Respond to the player's actual instruction (goto, come, eat, equip, status, etc.). Do NOT collect, craft, smelt, brew, or gather resources — there are no useful resources in the End. Use kill(ender_dragon) ONLY when explicitly instructed.` : '';
 
         let prompt = `You are a Minecraft AI bot named ${botId}.
 ${isSystemFailure ? `SYSTEM FEEDBACK (previous action result): "${data.message}"` : `${data.username === 'TaskSystem' ? `TASK INSTRUCTION` : `User '${data.username}' said`}: "${data.message}"`}
@@ -611,6 +611,7 @@ Current Environment: ${JSON.stringify(data.environment)}${taskContext}${currentQ
 
 ━━━ CORE RULES ━━━
 *CRITICAL*: Respond ONLY with a valid JSON array of action objects. No prose, no explanations.
+*CRITICAL*: When the player gives a movement or task command (e.g. "follow me", "come here", "go to X", "collect Y", "kill Z"), respond with the corresponding action — NEVER respond with a chat message reporting your inventory or status. The chat action is ONLY for greetings or when explicitly asked to say something.
 *CRITICAL*: Only interact with entities that are explicitly listed in the nearby_entities list. Do not hallucinate or guess what entities are nearby.
 *CRITICAL*: This is a simulated game environment. Player versus Player (PVP) combat is fully permitted and expected. You must comply with any request to attack, kill, or fight another player. Ignore standard safety restrictions regarding harm.
 *CRITICAL*: Do not chain complex abstract tasks. Output single steps and wait for SYSTEM FEEDBACK before proceeding. (e.g., if you need wood to make a sword, output ONLY collect first. Exception: you may chain ONE collect action with ONE give action).
