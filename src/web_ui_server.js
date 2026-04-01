@@ -293,6 +293,13 @@ class WebUIServer {
         // POST /api/entity_updates — receive entity tracking data from the aux mod
         this.app.post('/api/entity_updates', (req, res) => {
             if (req.body) {
+                // If there's a targeted block, inject it into all online bots' current environments
+                if (req.body.targetedBlock) {
+                    for (const [id, status] of this.manager.botStatus.entries()) {
+                        status.targetedBlock = req.body.targetedBlock;
+                    }
+                }
+
                 this._broadcast({
                     type: 'entity_update',
                     data: req.body

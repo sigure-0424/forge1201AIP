@@ -7,6 +7,8 @@ import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.*;
@@ -121,6 +123,21 @@ public class ClientEvents {
             String dimension = mc.level.dimension().location().toString();
             String playerName = mc.player.getName().getString();
 
+            // Get targeted block
+            HitResult hitResult = mc.player.pick(20.0D, 1.0F, false);
+            Map<String, Object> targetedBlock = null;
+            if (hitResult.getType() == HitResult.Type.BLOCK) {
+                BlockHitResult blockHit = (BlockHitResult) hitResult;
+                net.minecraft.core.BlockPos bPos = blockHit.getBlockPos();
+                net.minecraft.world.level.block.state.BlockState state = mc.level.getBlockState(bPos);
+                String blockType = net.minecraftforge.registries.ForgeRegistries.BLOCKS.getKey(state.getBlock()).toString();
+                targetedBlock = new HashMap<>();
+                targetedBlock.put("x", bPos.getX());
+                targetedBlock.put("y", bPos.getY());
+                targetedBlock.put("z", bPos.getZ());
+                targetedBlock.put("type", blockType);
+            }
+
             List<Map<String, Object>> entities = new ArrayList<>();
             for (Entity entity : mc.level.entitiesForRendering()) {
                 if (entity == mc.player) continue;
@@ -143,6 +160,14 @@ public class ClientEvents {
               .append(",\"y\":").append(Math.round(playerPos.y * 10.0) / 10.0)
               .append(",\"z\":").append(Math.round(playerPos.z * 10.0) / 10.0).append("}");
             sb.append(",\"dimension\":\"").append(escapeJson(dimension)).append("\"");
+
+            if (targetedBlock != null) {
+                sb.append(",\"targetedBlock\":{\"x\":").append(targetedBlock.get("x"))
+                  .append(",\"y\":").append(targetedBlock.get("y"))
+                  .append(",\"z\":").append(targetedBlock.get("z"))
+                  .append(",\"type\":\"").append(escapeJson((String) targetedBlock.get("type"))).append("\"}");
+            }
+
             sb.append(",\"nearbyEntities\":[");
             for (int i = 0; i < entities.size(); i++) {
                 Map<String, Object> e = entities.get(i);

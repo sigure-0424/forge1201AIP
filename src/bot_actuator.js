@@ -2459,6 +2459,78 @@ async function processActionQueue() {
                     }
                 }
 
+            // ── withdraw_from_container ───────────────────────────────────────
+            } else if (action.action === 'withdraw_from_container') {
+                const tx = action.x !== undefined ? parseFloat(action.x) : null;
+                const ty = action.y !== undefined ? parseFloat(action.y) : null;
+                const tz = action.z !== undefined ? parseFloat(action.z) : null;
+                const itemTargetName = action.item || action.target;
+                const quantity = parseInt(action.quantity, 10) || 1;
+
+                if (tx === null || ty === null || tz === null || !itemTargetName) {
+                    bot.chat(`[System Error] Missing target, item, or coordinates for withdraw_from_container.`);
+                    process.send({ type: 'USER_CHAT', data: { username: "System", message: 'Missing target, item, or coordinates for withdraw_from_container.', environment: getEnvironmentContext() } });
+                } else {
+                    bot.chat(`[System] Heading to container at (${tx}, ${ty}, ${tz}) to get ${quantity} ${itemTargetName}...`);
+                    try {
+                        await withTimeout(bot.pathfinder.goto(new goals.GoalNear(tx, ty, tz, 2)), 30000, 'goto container', () => bot.pathfinder.setGoal(null));
+                        const block = bot.blockAt(new Vec3(tx, ty, tz));
+                        const bname = block?.name || '';
+                        const isContainer = bname === 'chest' || bname === 'barrel' ||
+                                            bname === 'shulker_box' || bname.endsWith('_shulker_box');
+
+                        if (block && isContainer) {
+                            const containerWindow = await bot.openContainer(block);
+                            let taken = 0;
+                            const neededIds = [];
+
+                            // Determine item IDs to search for
+                            const targetGroup = MATERIAL_TAG_GROUPS[itemTargetName];
+                            if (targetGroup) {
+                                for (const n of targetGroup) {
+                                    const id = bot.registry.itemsByName[n]?.id || bot.registry.blocksByName[n]?.id;
+                                    if (id !== undefined) neededIds.push(id);
+                                }
+                            } else {
+                                const id = bot.registry.itemsByName[itemTargetName]?.id || bot.registry.blocksByName[itemTargetName]?.id;
+                                if (id !== undefined) neededIds.push(id);
+                            }
+
+                            // We need to re-query the container items after each withdraw because the array changes
+                            while (taken < quantity && !currentCancelToken.cancelled) {
+                                const currentItems = containerWindow.containerItems();
+                                const match = currentItems.find(i => neededIds.includes(i.type));
+                                if (!match) break;
+
+                                const amountToTake = Math.min(match.count, quantity - taken);
+                                try {
+                                    await containerWindow.withdraw(match.type, null, amountToTake);
+                                    taken += amountToTake;
+                                } catch (e) {
+                                    console.log(`[Actuator] withdraw_from_container error: ${e.message}`);
+                                    break;
+                                }
+                            }
+                            bot.closeWindow(containerWindow);
+
+                            if (taken > 0) {
+                                bot.chat(`[System] Took ${taken} ${itemTargetName} from container.`);
+                                process.send({ type: 'USER_CHAT', data: { username: "System", message: `Successfully withdrew ${taken} ${itemTargetName}.`, environment: getEnvironmentContext() } });
+                            } else {
+                                bot.chat(`[System Error] Container did not have ${itemTargetName}.`);
+                                process.send({ type: 'USER_CHAT', data: { username: "System", message: `Container did not contain ${itemTargetName}.`, environment: getEnvironmentContext() } });
+                            }
+                        } else {
+                            bot.chat(`[System Error] Found ${bname || 'air'} instead of a container.`);
+                            process.send({ type: 'USER_CHAT', data: { username: "System", message: `No container at (${tx}, ${ty}, ${tz}).`, environment: getEnvironmentContext() } });
+                        }
+                    } catch(e) {
+                        console.log(`[Actuator] Failed to withdraw from container: ${e.message}`);
+                        bot.chat(`[System Error] Could not reach container.`);
+                        process.send({ type: 'USER_CHAT', data: { username: "System", message: `Could not reach container: ${e.message}`, environment: getEnvironmentContext() } });
+                    }
+                }
+
             // ── find_and_equip ────────────────────────────────────────────────
             } else if (action.action === 'find_and_equip') {
                 try {
@@ -3426,6 +3498,16 @@ async function processActionQueue() {
                                     console.log(`[collect] oak_log: at block pos type=${targetBlock?.type} name=${targetBlock?.name} searchIds=${JSON.stringify(searchIds)}`);
                                 }
                                 if (!targetBlock || !searchIds.includes(targetBlock.type)) continue;
+
+                                const bname = targetBlock.name.toLowerCase();
+                                const isContainer = bname === 'chest' || bname === 'barrel' ||
+                                                    bname === 'shulker_box' || bname.endsWith('_shulker_box');
+                                if (isContainer) {
+                                    bot.chat(`[System Error] I am not allowed to break containers to collect items.`);
+                                    process.send({ type: 'USER_CHAT', data: { username: "System", message: 'Use withdraw_from_container to get items from chests, do not mine them.', environment: getEnvironmentContext() } });
+                                    currentCancelToken.cancelled = true;
+                                    break;
+                                }
 
                                 await equipBestTool(targetBlock);
                                 if (targetBlock.harvestTools && Object.keys(targetBlock.harvestTools).length > 0) {

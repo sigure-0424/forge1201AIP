@@ -573,6 +573,11 @@ Do NOT return any action other than chat.`;
             return `\nCURRENT TASK: ${currentDesc}${remaining.length > 0 ? ` | QUEUED: ${JSON.stringify(remaining)}` : ''}`;
         })();
 
+        // Include targeted block context if available
+        const targetedBlockContext = botStatusNow.targetedBlock
+            ? `\nPLAYER IS LOOKING AT: ${botStatusNow.targetedBlock.type} at X:${botStatusNow.targetedBlock.x} Y:${botStatusNow.targetedBlock.y} Z:${botStatusNow.targetedBlock.z}`
+            : '';
+
         // Build other-bots context for multi-bot coordination
         const otherBotLines = [...this.botStatus.entries()]
             .filter(([id]) => id !== botId)
@@ -607,7 +612,7 @@ Do NOT return any action other than chat.`;
 
         let prompt = `You are a Minecraft AI bot named ${botId}.
 ${isSystemFailure ? `SYSTEM FEEDBACK (previous action result): "${data.message}"` : `${data.username === 'TaskSystem' ? `TASK INSTRUCTION` : `User '${data.username}' said`}: "${data.message}"`}
-Current Environment: ${JSON.stringify(data.environment)}${taskContext}${currentQueueContext}${otherBotsContext}${blackboardContext}${coordinatorNote}${endDimNote}
+Current Environment: ${JSON.stringify(data.environment)}${targetedBlockContext}${taskContext}${currentQueueContext}${otherBotsContext}${blackboardContext}${coordinatorNote}${endDimNote}
 
 ━━━ CORE RULES ━━━
 *CRITICAL*: Respond ONLY with a valid JSON array of action objects. No prose, no explanations.
@@ -637,6 +642,7 @@ Current Environment: ${JSON.stringify(data.environment)}${taskContext}${currentQ
 [{"action": "equip", "target": "diamond_pickaxe"}]
 [{"action": "equip_armor"}]                                                       -- equips best armor in inventory
 [{"action": "find_and_equip"}]                                                    -- finds nearby equipment chests (smooth_stone marker) and takes missing gear (1 per slot/tool)
+[{"action": "withdraw_from_container", "target": "chest", "item": "stone", "quantity": 200, "x": 10, "y": 64, "z": 20}] -- go to the container at the coordinates, open it, and withdraw the item. Use this for regular chests. Do NOT use collect to get items out of chests. If the user refers to "that chest" or "this chest", use the PLAYER IS LOOKING AT coordinates.
 [{"action": "craft", "target": "wooden_pickaxe", "quantity": 1}]
 [{"action": "place", "target": "crafting_table"}]
 
