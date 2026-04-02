@@ -4,6 +4,8 @@ project_short_name: "Forge1201AIP"
 current_goal: "Implement autonomous AI player framework using Mineflayer for Minecraft 1.20.1 Forge environment, including FML3 handshakes and dynamic registry handling."
 active_tasks: []
 recent_changes:
+  - "2026-04-03: Bridge construction on void-edge stalls fixed (BUGFIX-20260403-001): added forward-gap recovery in goto stuck handling. When hazard checks block blind force-walk, bot now detects void gaps, selects a valid bridge block (preferred action.block/action.material when specified, otherwise best available full block), places forward support blocks, and retries navigation. Also added helpers: isAirLikeBlock/isSolidBridgeSupport/chooseBridgeBlock/hasForwardGap/tryBridgeForward. npm test: 6/6 pass."
+  - "2026-04-01: Spatial grounding fix + MacroScreen cell-based UI (BUGFIX-20260401-001): (1) ClientChatEvent handler in ClientEvents.java sends immediate /api/entity_updates snapshot at chat-send time so targetedBlock is always fresh; entity_updates polling 100→40 ticks; BotCommand.cmdChat also snapshots mc.hitResult before POST. (2) MacroScreen fully rewritten: per-step EditBox cells with ↑/↓/✕ buttons, visual step-arrows, IF-TRUE/ELSE branch indicator, loop-back note, dynamic height, snippet buttons, 'Load Sample' 9-step demo macro, MacroManager.updateMacro added. npm test: not re-run (Java-only change)."
   - "2026-03-31: UI 'no bots' fix + System Launcher (BUGFIX-20260331-002): OrchestratorClient — fixed 4 parsing bugs (init event unhandled, botId wrong nesting, disconnected wrong nesting, position nested); added dimension to debugState; new launcher config section + SystemLauncherManager.java + LauncherScreen.java; F10 opens launcher GUI. npm test: 6/6 pass."
   - "2026-03-31: Five-issue bug fix batch (BUGFIX-20260331-001): (1) UI Status Sync — GET /api/bots and WS init now include restarting bots (botConnOptions not in bots map) as offline. (2) Auto End dragon combat — endDimNote changed to require explicit player instruction before kill(ender_dragon). (3) Irrelevant AI responses — new CRITICAL rule: never use chat action when a movement/task command was given. (4) Enderman eye contact in runWaitLoop — skip lookAt for non-aggro'd Endermen. (5) Mysterious End behavior — fixed by endDimNote change. npm test: 6/6 pass."
   - "2026-03-29: v0.1.1-beta additional features (BUGFIX-20260329-003): Node.js: Bug #9 water/boat (_shouldUseBoat helper, liquidCost 8 in goto, boat handoff); Bug #3 blackboard (_readBlackboard/_writeBlackboard, BLACKBOARD_FILE, blackboard_set/get actions, blackboard context in LLM prompt, SHARED BLACKBOARD section); safe zones (SAFE_ZONES_FILE, _loadSafeZones, _isInSafeZone, collect skip, goto warn); web_ui_server.js GET/POST/DELETE /api/safezones. Forge aux mod (aux_mod/): Gradle project (build.gradle/settings/properties), AuxMod.java, ForgeAIPConfig.java, BotStatus.java, SafeZoneManager.java (+dimension field), MacroManager.java, OrchestratorClient.java (WebSocket+HTTP/java.net.http), BotStatusHUD.java, MacroScreen.java, ClientEvents.java (F8 HUD toggle, F9 macro screen, entity tracking every 100 ticks, login/logout lifecycle), BotCommand.java (/bot list/start/stop/chat), SafeZoneCommand.java (/safezone add/addbox/remove/list). npm test: 6/6 pass."
@@ -63,7 +65,7 @@ recent_changes:
 decisions_index:
 \
 smoke_status:
-  last_run: "2026-03-31"
+  last_run: "2026-04-03"
   command: "npm test"
   result: "6/6 pass (FML3 handshake, DynamicRegistry, middlewares, ConfigRAG, AgentManager recovery, E2E integration all PASS)."
 hazards:

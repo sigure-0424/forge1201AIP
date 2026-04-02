@@ -36,7 +36,7 @@ public class ClientEvents {
     public static KeyMapping LAUNCHER_SCREEN_KEY;
 
     private static int entityTrackTick = 0;
-    private static final int ENTITY_TRACK_INTERVAL = 100; // every 5 seconds (20 ticks/s)
+    private static final int ENTITY_TRACK_INTERVAL = 40; // every 2 seconds (20 ticks/s)
 
     // -------------------------------------------------------------------------
     // Keybind registration (mod event bus — handled in AuxMod constructor)
@@ -183,6 +183,48 @@ public class ClientEvents {
             OrchestratorClient.getInstance().postJson("/api/entity_updates", sb.toString());
         } catch (Exception ex) {
             AuxMod.LOGGER.debug("[ForgeAIP] Entity tracking error: {}", ex.getMessage());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Chat-triggered immediate snapshot (fixes stale targetedBlock on "that chest")
+    // -------------------------------------------------------------------------
+
+    /**
+     * Fires when the player submits a chat message (before the server receives it).
+     * Captures the current crosshair target and sends an immediate entity-update so
+     * the orchestrator has a fresh targetedBlock for the next LLM call.
+     */
+    @SubscribeEvent
+    public static void onClientChat(net.minecraftforge.client.event.ClientChatEvent event) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) return;
+        if (!OrchestratorClient.getInstance().isConnected()) return;
+        if (mc.hitResult == null || mc.hitResult.getType() != HitResult.Type.BLOCK) return;
+
+        try {
+            BlockHitResult blockHit = (BlockHitResult) mc.hitResult;
+            net.minecraft.core.BlockPos bPos = blockHit.getBlockPos();
+            net.minecraft.world.level.block.state.BlockState state = mc.level.getBlockState(bPos);
+            String blockType = net.minecraftforge.registries.ForgeRegistries.BLOCKS
+                    .getKey(state.getBlock()).toString();
+
+            Vec3 pp = mc.player.position();
+            String playerName = mc.player.getName().getString();
+            String dimension  = mc.level.dimension().location().toString();
+
+            String body = String.format(
+                "{\"playerName\":\"%s\",\"position\":{\"x\":%.1f,\"y\":%.1f,\"z\":%.1f}," +
+                "\"dimension\":\"%s\",\"targetedBlock\":{\"x\":%d,\"y\":%d,\"z\":%d,\"type\":\"%s\"}," +
+                "\"nearbyEntities\":[]}",
+                escapeJson(playerName), pp.x, pp.y, pp.z,
+                escapeJson(dimension),
+                bPos.getX(), bPos.getY(), bPos.getZ(),
+                escapeJson(blockType));
+
+            OrchestratorClient.getInstance().postJson("/api/entity_updates", body);
+        } catch (Exception ex) {
+            AuxMod.LOGGER.debug("[ForgeAIP] Chat-triggered snapshot error: {}", ex.getMessage());
         }
     }
 

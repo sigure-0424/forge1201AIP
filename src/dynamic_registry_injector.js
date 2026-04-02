@@ -218,6 +218,13 @@ class DynamicRegistryInjector {
                         this.registry.blockCollisionShapes.blocks[shortName] = isBlock ? 1 : 0;
                     }
 
+                    // Handle gravestones explicitly to prevent collision conflicts
+                    if (entry.name === 'gravestones:modded_gravestone') {
+                        this.registry.blockCollisionShapes.blocks[entry.name] = 1; // Full cube collision
+                        this.registry.blockCollisionShapes.blocks[shortName] = 1;
+                        modBlock.boundingBox = 'block';
+                    }
+
                     dummyCount++;
                 }
             } else if (entry.type === 'item') {

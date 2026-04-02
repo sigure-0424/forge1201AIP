@@ -296,9 +296,17 @@ bot.on('spawn', async () => {
                 }
                 const attacker = findNearestHostile(6);
                 if (attacker) {
-                    if (!bot.pathfinder.isMoving() && !bot.pathfinder.isMining()) equipBestWeapon().catch(() => {});
-                    if (bot.entity.position.distanceTo(attacker.position) <= 3.5) {
+                    // Include Piglins in retaliation logic
+                    const piglinNames = ['piglin', 'piglin_brute'];
+                    if (piglinNames.includes(attacker?.name?.toLowerCase())) {
+                        console.log('[Actuator] Retaliating against Piglin attacker.');
+                        if (!bot.pathfinder.isMoving() && !bot.pathfinder.isMining()) equipBestWeapon().catch(() => {});
                         bot.attack(attacker);
+                    } else {
+                        if (!bot.pathfinder.isMoving() && !bot.pathfinder.isMining()) equipBestWeapon().catch(() => {});
+                        if (bot.entity.position.distanceTo(attacker.position) <= 3.5) {
+                            bot.attack(attacker);
+                        }
                     }
                 }
                 // Self-defense: attack the attacker but do NOT destroy the active
@@ -1019,6 +1027,18 @@ bot.on('spawn', async () => {
                 console.log(`[Actuator] Now at (${bot.entity.position.x.toFixed(1)}, ${bot.entity.position.y.toFixed(1)}, ${bot.entity.position.z.toFixed(1)}) onGround=${bot.entity.onGround}`);
             } else {
                 console.log('[Actuator] No standable solid block found nearby. Will try pathfinder or ask player.');
+                // Check for void environment and initiate bridging
+                console.log('[Actuator] No solid ground detected. Initiating bridge construction...');
+                const bridgeStart = bot.entity.position.offset(0, -1, 0);
+                for (let i = 0; i < 2000; i++) {
+                    const bridgeBlock = bot.inventory.items().find(item => item.name.includes('planks') || item.name.includes('stone'));
+                    if (!bridgeBlock) {
+                        console.log('[Actuator] Out of blocks for bridging. Stopping operation.');
+                        break;
+                    }
+                    await bot.equip(bridgeBlock, 'hand');
+                    await bot.placeBlock(bot.blockAt(bridgeStart.offset(0, -1, i)), bot.entity.position.offset(0, -1, i));
+                }
             }
         }
 
@@ -1631,6 +1651,112 @@ function isSafeForward(angleRad) {
         }
         return true;
     } catch (_) { return false; }
+}
+
+function isAirLikeBlock(b) {
+    if (!b) return true;
+    return b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air';
+}
+
+function isSolidBridgeSupport(b) {
+    if (!b) return false;
+    return b.boundingBox === 'block' && !b.name.includes('water') && !b.name.includes('lava');
+}
+
+function chooseBridgeBlock(preferredName) {
+    const preferredNeedle = (preferredName || '').toLowerCase().trim();
+    const items = bot.inventory.items();
+    if (!items || items.length === 0) return null;
+
+    const isGoodBridgeBlock = (item) => {
+        const name = (item?.name || '').toLowerCase();
+        if (!name) return false;
+        if (!bot.registry.blocksByName[name]) return false;
+        if (name.includes('slab') || name.includes('stair') || name.includes('wall') ||
+            name.includes('fence') || name.includes('door') || name.includes('trapdoor') ||
+            name.includes('pane') || name.includes('torch') || name.includes('carpet') ||
+            name.includes('button') || name.includes('pressure_plate') || name.includes('rail') ||
+            name.includes('bucket') || name.includes('bed') || name.includes('boat')) {
+            return false;
+        }
+        return true;
+    };
+
+    if (preferredNeedle) {
+        const preferred = items
+            .filter(isGoodBridgeBlock)
+            .filter(i => i.name.toLowerCase().includes(preferredNeedle))
+            .sort((a, b) => b.count - a.count)[0];
+        if (preferred) return preferred;
+    }
+
+    return items
+        .filter(isGoodBridgeBlock)
+        .sort((a, b) => b.count - a.count)[0] || null;
+}
+
+function hasForwardGap(angleRad) {
+    try {
+        const pos = bot.entity.position;
+        const bx = Math.floor(pos.x + Math.cos(angleRad));
+        const bz = Math.floor(pos.z + Math.sin(angleRad));
+        const by = Math.floor(pos.y);
+        const below1 = bot.blockAt(new Vec3(bx, by - 1, bz));
+        const below2 = bot.blockAt(new Vec3(bx, by - 2, bz));
+        return isAirLikeBlock(below1) && isAirLikeBlock(below2);
+    } catch (_) {
+        return false;
+    }
+}
+
+async function tryBridgeForward(angleRad, preferredName, maxPlacements = 3) {
+    const bridgeBlock = chooseBridgeBlock(preferredName);
+    if (!bridgeBlock) {
+        bot.chat('[System Error] Cannot bridge: no placeable blocks in inventory.');
+        return false;
+    }
+
+    await bot.equip(bridgeBlock, 'hand');
+    const base = bot.entity.position;
+    const by = Math.floor(base.y);
+    const ux = Math.cos(angleRad);
+    const uz = Math.sin(angleRad);
+
+    for (let step = 1; step <= maxPlacements; step++) {
+        const tx = Math.floor(base.x + step * ux);
+        const tz = Math.floor(base.z + step * uz);
+        const target = new Vec3(tx, by - 1, tz);
+        const existing = bot.blockAt(target);
+        if (isSolidBridgeSupport(existing)) continue;
+
+        const faces = [
+            new Vec3(0, 1, 0),
+            new Vec3(1, 0, 0),
+            new Vec3(-1, 0, 0),
+            new Vec3(0, 0, 1),
+            new Vec3(0, 0, -1),
+            new Vec3(0, -1, 0),
+        ];
+
+        let placed = false;
+        for (const face of faces) {
+            const refPos = target.minus(face);
+            const refBlock = bot.blockAt(refPos);
+            if (!isSolidBridgeSupport(refBlock)) continue;
+            try {
+                await withTimeout(bot.placeBlock(refBlock, face), 3000, 'bridge place');
+                placed = true;
+                break;
+            } catch (_) {
+                // Try next face
+            }
+        }
+
+        if (!placed) return false;
+        await new Promise(r => setTimeout(r, 120));
+    }
+
+    return true;
 }
 
 let debouncer = null; // initialized in 'spawn' — used for VeinMiner cascade detection
@@ -3080,7 +3206,12 @@ async function processActionQueue() {
                                         bot.setControlState('forward', false);
                                         bot.setControlState('sprint', false);
                                     } else {
-                                        console.log('[Actuator] XYZ force-walk aborted: hazard ahead.');
+                                        const bridgeHint = action.bridge_block || action.block || action.material;
+                                        if (hasForwardGap(a3f) && await tryBridgeForward(a3f, bridgeHint, 2)) {
+                                            bot.chat('[System] Bridged over a gap. Continuing movement...');
+                                        } else {
+                                            console.log('[Actuator] XYZ force-walk aborted: hazard ahead.');
+                                        }
                                     }
                                 }
                                 bot.pathfinder.thinkTimeout = prevThink3;
@@ -3260,8 +3391,13 @@ async function processActionQueue() {
                                     bot.setControlState('forward', false);
                                     bot.setControlState('sprint', false);
                                 } else {
-                                    bot.chat('[System] Blocked by hazard ahead. Cannot force-walk.');
-                                    console.log('[Actuator] Goto force-walk aborted: hazard ahead.');
+                                    const bridgeHint = action.bridge_block || action.block || action.material;
+                                    if (hasForwardGap(af) && await tryBridgeForward(af, bridgeHint, 2)) {
+                                        bot.chat('[System] Gap detected. Bridged forward and retrying route...');
+                                    } else {
+                                        bot.chat('[System] Blocked by hazard ahead. Cannot force-walk.');
+                                        console.log('[Actuator] Goto force-walk aborted: hazard ahead.');
+                                    }
                                 }
                                 if (_stuckCount >= 7) {
                                     console.log('[Actuator] Stuck recovery exhausted (7 attempts). Aborting goto.');

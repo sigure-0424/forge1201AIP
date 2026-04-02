@@ -84,6 +84,13 @@ public class MacroManager {
         }
     }
 
+    public void updateMacro(int index, Macro macro) {
+        if (index >= 0 && index < macros.size()) {
+            macros.set(index, macro);
+            save();
+        }
+    }
+
     public List<Macro> getMacros() {
         return Collections.unmodifiableList(macros);
     }

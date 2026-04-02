@@ -29,6 +29,13 @@ class CreateContraptionHazard {
                 info.height = 0;
             }
             
+            // Check if this block is a modded gravestone
+            if (block && block.name === 'gravestones:modded_gravestone') {
+                info.safe = true; // Gravestones are interactable
+                info.physical = true; // Treat as walkable
+                info.height = 1; // Default block height
+            }
+            
             return info;
         };
     }

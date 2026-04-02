@@ -1,69 +1,140 @@
 {
-  "timestamp": "2026-03-31T16:17:12.187Z",
+  "timestamp": "2026-04-02T17:43:09.241Z",
   "ready": true,
   "position": {
-    "x": -386.5,
-    "y": 65,
-    "z": -513.5
+    "x": 26.7,
+    "y": 58.2,
+    "z": -104.3
   },
   "health": 20,
   "food": 20,
-  "dimension": "overworld",
-  "isExecuting": false,
-  "actionQueue": [
-    {
-      "action": "loot_chest_special",
-      "target": {
-        "x": -391,
-        "y": 65,
-        "z": -536
-      }
-    },
-    {
-      "action": "loot_chest_special",
-      "target": {
-        "x": -390,
-        "y": 65,
-        "z": -537
-      }
-    }
-  ],
+  "dimension": "the_end",
+  "isExecuting": true,
+  "actionQueue": [],
   "treeDir": null,
   "inventory": [
     {
-      "name": "iron_pickaxe",
-      "count": 1
-    },
-    {
-      "name": "ender_pearl",
-      "count": 1
-    },
-    {
-      "name": "flint_and_steel",
-      "count": 1
-    },
-    {
-      "name": "unknown",
-      "count": 1
-    },
-    {
-      "name": "end_stone",
+      "name": "createbigcannons:built_up_heating",
       "count": 64
     },
     {
-      "name": "end_stone",
+      "name": "createbigcannons:built_up_heating",
       "count": 64
     },
     {
-      "name": "oak_boat",
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "water_bucket",
       "count": 1
     },
     {
-      "name": "bucket",
-      "count": 16
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
     },
     {
-      "name": "end_stone",
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
+    },
+    {
+      "name": "createbigcannons:built_up_heating",
       "count": 64
     },
     {
@@ -72,114 +143,26 @@
     },
     {
       "name": "createbigcannons:flowing_molten_nethersteel",
-      "count": 25
-    },
-    {
-      "name": "iron_pickaxe",
-      "count": 1
-    },
-    {
-      "name": "createbigcannons:molten_cast_iron",
-      "count": 29
-    },
-    {
-      "name": "end_stone",
-      "count": 64
-    },
-    {
-      "name": "end_stone",
-      "count": 37
-    },
-    {
-      "name": "createaddition:portable_energy_interface",
-      "count": 1
-    },
-    {
-      "name": "egg",
-      "count": 1
-    },
-    {
-      "name": "clay_ball",
-      "count": 16
-    },
-    {
-      "name": "create:content_observer",
-      "count": 1
-    },
-    {
-      "name": "create:funnel",
-      "count": 1
-    },
-    {
-      "name": "bone",
       "count": 2
-    },
-    {
-      "name": "stone_bricks",
-      "count": 3
-    },
-    {
-      "name": "iron_pickaxe",
-      "count": 1
-    },
-    {
-      "name": "iron_pickaxe",
-      "count": 1
-    },
-    {
-      "name": "mossy_cobblestone",
-      "count": 2
-    },
-    {
-      "name": "gunpowder",
-      "count": 1
     },
     {
       "name": "createbigcannons:built_up_heating",
       "count": 64
     },
     {
-      "name": "iron_axe",
-      "count": 1
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
     },
     {
-      "name": "iron_axe",
-      "count": 1
-    },
-    {
-      "name": "iron_axe",
-      "count": 1
-    },
-    {
-      "name": "iron_shovel",
-      "count": 1
-    },
-    {
-      "name": "iron_pickaxe",
-      "count": 1
-    },
-    {
-      "name": "iron_pickaxe",
-      "count": 1
-    },
-    {
-      "name": "iron_axe",
-      "count": 1
-    },
-    {
-      "name": "iron_axe",
-      "count": 1
-    },
-    {
-      "name": "iron_axe",
-      "count": 1
+      "name": "createbigcannons:built_up_heating",
+      "count": 64
     }
   ],
   "armor": {
     "head": null,
-    "torso": "iron_chestplate",
-    "legs": "iron_leggings",
-    "feet": "iron_boots",
-    "hand": "iron_axe"
+    "torso": null,
+    "legs": null,
+    "feet": null,
+    "hand": "createbigcannons:built_up_heating"
   }
 }
