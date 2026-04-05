@@ -283,6 +283,17 @@ class AgentManager {
                     return; // Don't feed this to the LLM
                 }
 
+                // Wiki search results — feed directly back to LLM so it can plan
+                // the actual MOD interaction based on the retrieved information.
+                if (data.message.startsWith('[Wiki')) {
+                    console.log(`[AgentManager] Wiki result received for ${botId} — routing to LLM.`);
+                    const queue = this.chatQueue.get(botId) || [];
+                    queue.unshift(data);
+                    this.chatQueue.set(botId, queue);
+                    this.processNextQueueItem(botId);
+                    return;
+                }
+
                 // Issue 8: Expanded success/failure pattern detection
                 const SUCCESS_PATTERNS = [
                     'Successfully', 'Explored', 'Entered portal', 'Reached destination',
@@ -290,8 +301,10 @@ class AgentManager {
                     'Collected', 'Now following', 'Geared up', 'Recovered', 'Done'
                 ];
                 const FAILURE_PATTERNS = [
-                    'Failed', 'Cannot', 'No ', 'Error', 'failed', 'not found',
-                    'cycle', 'timed out', 'unreachable', 'stuck', 'Task Remaining'
+                    'Failed', 'Cannot', 'Error', 'failed', 'not found',
+                    'cycle', 'timed out', 'unreachable', 'stuck', 'Task Remaining',
+                    'No furnace', 'No brewing stand', 'No enchanting table',
+                    'not in inventory', 'not available', 'No valid'
                 ];
                 const isSuccess = SUCCESS_PATTERNS.some(p => data.message.includes(p));
                 const isFailure = !isSuccess && FAILURE_PATTERNS.some(p => data.message.includes(p));
@@ -814,6 +827,55 @@ WITHER: collect soul_sand(4) + kill wither_skeleton(many) for skulls → place_p
 ENDER DRAGON: craft eye_of_ender → explore for stronghold → activate_end_portal → navigate_portal(end) → kill(ender_dragon,timeout:600)
 ELDER GUARDIAN: brew(water_breathing) + brew(night_vision) → explore for ocean_monument → eat(milk) → kill(elder_guardian,qty:3,timeout:300)
 BLAZE (fire resistance): brew(fire_resistance) → navigate_portal(nether) → goto(fortress) → kill(blaze,qty:N,timeout:180)
+
+━━━ MOD ITEM INTERACTIONS ━━━
+*CRITICAL*: MODs add items/blocks that cannot be handled with basic actions. Use the following workflow:
+  STEP 1 — If you are unsure how a MOD item/block works, use wiki_search FIRST.
+  STEP 2 — Read the wiki results (returned as SYSTEM FEEDBACK) to understand the interaction.
+  STEP 3 — Use activate_block (simple single-click) OR macro (multi-step sequence) to perform the interaction.
+
+[{"action": "wiki_search", "query": "create mod wrench rotate pickup block"}]
+  -- Searches the local wiki and returns usage info as SYSTEM FEEDBACK.
+  -- Use this before interacting with any unfamiliar MOD item/block.
+  -- top_n: optional, max results (default 5)
+
+[{"action": "activate_block", "x": 10, "y": 65, "z": 20, "item": "create:wrench", "sneak": true}]
+  -- Right-click (optionally sneak+right-click) on a block at given coordinates.
+  -- item:  optional — equip this item before clicking (e.g. "create:wrench", "thermal:crescent_hammer")
+  -- sneak: optional boolean — hold sneak/crouch during the click
+  -- face:  optional — "top"|"bottom"|"north"|"south"|"east"|"west" (default: auto)
+  -- Example (Create MOD wrench pickup): sneak:true + item:"create:wrench"
+  -- Example (Create MOD wrench rotate): sneak:false + item:"create:wrench"
+
+[{"action": "macro", "description": "Use wrench to pick up Create gear",
+  "steps": [
+    {"primitive": "equip",         "item": "create:wrench"},
+    {"primitive": "goto",          "x": 10, "y": 64, "z": 20, "tolerance": 3},
+    {"primitive": "look_at",       "x": 10, "y": 65, "z": 20},
+    {"primitive": "sneak",         "value": true},
+    {"primitive": "activate_block","x": 10, "y": 65, "z": 20},
+    {"primitive": "sneak",         "value": false},
+    {"primitive": "wait",          "ms": 300}
+  ]
+}]
+  -- Execute a sequence of primitive operations. Use when activate_block alone is insufficient.
+  -- Primitives: equip, goto, look_at, sneak, sprint, activate_block, activate_item,
+  --             swing_arm, attack_block, wait, send_packet, chat
+  -- continue_on_error: optional boolean — keep going even if a step fails
+
+[{"action": "send_custom_payload", "channel": "modname:channel", "data": "0100"}]
+  -- Send a MOD keybinding packet (for mods that use server-side key events).
+  -- channel: required, format "modname:channel_name" (from wiki or MOD source)
+  -- data:    optional hex string of packet body
+  -- Use this when the wiki says a MOD feature is triggered by a keybinding that sends a packet.
+
+━━━ MOD INTERACTION EXAMPLES ━━━
+Create MOD — wrench pickup:    activate_block + item:"create:wrench" + sneak:true
+Create MOD — wrench rotate:    activate_block + item:"create:wrench" + sneak:false
+Create MOD — configure block:  activate_block (no item needed, block opens GUI)
+Industrial MODs — wrench use:  wiki_search first to confirm the exact behavior
+Combat MOD combos:             macro with sneak/sprint/swing_arm/wait sequence
+Storage MOD remote access:     send_custom_payload (channel from wiki)
 `;
 
 
