@@ -52,7 +52,7 @@ class AgentManager {
 
         // WebUI integration
         this.botStatus = new Map();  // botId → latest BOT_STATUS payload
-        this.chatLog   = new Map();  // botId → array of { username, message, timestamp } (last 200)
+        this.chatLog   = new Map();  // botId → array of { username, message, timestamp } (last 200 entries)
         this.onEvent   = null;       // set by WebUIServer to receive broadcast events
     }
 
@@ -114,7 +114,7 @@ class AgentManager {
         const log = this.chatLog.get(botId) || [];
         const entry = { username, message, timestamp: Date.now() };
         log.push(entry);
-        while (log.length > 100) log.shift();
+        while (log.length > 200) log.shift();
         this.chatLog.set(botId, log);
         if (this.onEvent) this.onEvent({ type: 'bot_chat', botId, ...entry });
     }

@@ -89,19 +89,25 @@ class ForgeHandshakeStateMachine extends EventEmitter {
         const disc = payload[0];
         console.log(`[ForgeHandshake] Disc ${disc} on ${responseChannel} (Inner: ${innerChannelName || 'none'})`);
 
-        if (disc === 1) {
+        if (disc === 0) {
+            // Disc 0: ServerHello — reply with ClientHello (disc 1) + FML version byte (3)
+            this.sendResponse(messageId, responseChannel, innerChannelName || this.innerChannel, Buffer.from([1, 3]));
+        } else if (disc === 1) {
+            // Disc 1: S2CModList — reply with C2SModListReply (disc 2)
             const reply = this.buildModListReply(payload);
             this.sendResponse(messageId, responseChannel, innerChannelName || this.innerChannel, reply);
         } else if (disc === 3 || disc === 4 || disc === 6) {
-            // Disc 3: RegistryData, Disc 4: Ack, Disc 6: RegistrySync
+            // Disc 3: S2CRegistry (registry data) — buffer and ACK
+            // Disc 4: S2CConfigData (config sync) — ACK
+            // Disc 6: S2CChannelMismatchData (channel mismatch) — ACK
             this.sendAck(messageId, responseChannel, innerChannelName || this.innerChannel);
             if (disc === 3) this.registrySyncBuffer.push(payload);
         } else if (disc === 5) {
             // Disc 5: S2CModData - Forge Spec says 'noResponse()'
             console.log('[ForgeHandshake] Skipping response for Disc 5.');
-        } else if (disc === 0) {
-            this.sendResponse(messageId, responseChannel, innerChannelName || this.innerChannel, Buffer.from([1, 3]));
         } else {
+            // Unknown discriminator — ACK to keep handshake progressing
+            console.log(`[ForgeHandshake] Unknown disc ${disc} — sending ACK.`);
             this.sendAck(messageId, responseChannel, innerChannelName || this.innerChannel);
         }
     }

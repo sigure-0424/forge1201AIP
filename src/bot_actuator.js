@@ -1065,15 +1065,30 @@ bot.on('spawn', async () => {
                 console.log('[Actuator] No standable solid block found nearby. Will try pathfinder or ask player.');
                 // Check for void environment and initiate bridging
                 console.log('[Actuator] No solid ground detected. Initiating bridge construction...');
-                const bridgeStart = bot.entity.position.offset(0, -1, 0);
-                for (let i = 0; i < 2000; i++) {
+                // Attempt to place blocks forward from the bot's current position.
+                // bridgeStart is one block below the bot; we place on the top face (+Y) of
+                // blocks two below the bot and extending outward in Z.
+                for (let i = 0; i < 10; i++) {
                     const bridgeBlock = bot.inventory.items().find(item => item.name.includes('planks') || item.name.includes('stone'));
                     if (!bridgeBlock) {
                         console.log('[Actuator] Out of blocks for bridging. Stopping operation.');
                         break;
                     }
+                    // Reference block: two blocks below the bot, extended i blocks in +Z
+                    const refPos = bot.entity.position.offset(0, -2, i);
+                    const refBlock = bot.blockAt(refPos);
+                    // Can only place against a solid block; skip if void/air
+                    if (!refBlock || refBlock.boundingBox !== 'block') {
+                        console.log(`[Actuator] No reference block at step ${i}. Stopping bridge.`);
+                        break;
+                    }
                     await bot.equip(bridgeBlock, 'hand');
-                    await bot.placeBlock(bot.blockAt(bridgeStart.offset(0, -1, i)), bot.entity.position.offset(0, -1, i));
+                    try {
+                        await bot.placeBlock(refBlock, new Vec3(0, 1, 0));
+                    } catch (e) {
+                        console.log(`[Actuator] placeBlock failed at step ${i}: ${e.message}`);
+                        break;
+                    }
                 }
             }
         }
@@ -2505,10 +2520,11 @@ function inferToolCategory(block) {
     }
 
     if (name.includes('log') || name.includes('_wood') || name.includes('plank') ||
+        name.includes('bamboo_block') || name.includes('bamboo_mosaic') ||
         name.includes('fence') || name.includes('stem') || name.includes('hyphae') ||
         name.includes('chest') || name.includes('barrel') || name.includes('bookshelf') ||
         name.includes('crafting_table') || name.includes('jukebox') || name.includes('note_block') ||
-        name.includes('ladder') || name.includes('door') || name.includes('trapdoor')) {
+        name.includes('door') || name.includes('trapdoor')) {
         return 'axe';
     }
     if (name.includes('dirt') || name.includes('gravel') || name.includes('sand') ||
@@ -2529,7 +2545,10 @@ const PLANK_NAMES = new Set([
 const LOG_NAMES = new Set([
     'oak_log', 'spruce_log', 'birch_log', 'jungle_log', 'acacia_log',
     'dark_oak_log', 'mangrove_log', 'cherry_log',
-    'oak_wood', 'spruce_wood', 'birch_wood', 'jungle_wood', 'acacia_wood', 'dark_oak_wood'
+    'oak_wood', 'spruce_wood', 'birch_wood', 'jungle_wood', 'acacia_wood',
+    'dark_oak_wood', 'mangrove_wood', 'cherry_wood',
+    // Bamboo (1.20+): bamboo_block is the log-equivalent, bamboo is the plant item
+    'bamboo_block', 'stripped_bamboo_block',
 ]);
 
 // ── Material Tag Groups ─────────────────────────────────────────────────────
@@ -2541,9 +2560,10 @@ const _LOG_LIST   = [...LOG_NAMES];
 const _PLANK_LIST = [...PLANK_NAMES];
 const MATERIAL_TAG_GROUPS = {
     // Any log variant satisfies a request for any specific log type
-    oak_log:         _LOG_LIST, spruce_log: _LOG_LIST, birch_log:    _LOG_LIST,
-    jungle_log:      _LOG_LIST, acacia_log: _LOG_LIST, dark_oak_log: _LOG_LIST,
-    mangrove_log:    _LOG_LIST, cherry_log: _LOG_LIST, oak_wood:     _LOG_LIST,
+    oak_log:         _LOG_LIST, spruce_log:    _LOG_LIST, birch_log:     _LOG_LIST,
+    jungle_log:      _LOG_LIST, acacia_log:    _LOG_LIST, dark_oak_log:  _LOG_LIST,
+    mangrove_log:    _LOG_LIST, cherry_log:    _LOG_LIST, oak_wood:      _LOG_LIST,
+    bamboo_block:    _LOG_LIST, stripped_bamboo_block: _LOG_LIST,
     // Any plank variant satisfies a request for any specific plank type
     oak_planks:     _PLANK_LIST, spruce_planks:   _PLANK_LIST, birch_planks:    _PLANK_LIST,
     jungle_planks:  _PLANK_LIST, acacia_planks:   _PLANK_LIST, dark_oak_planks: _PLANK_LIST,
@@ -5439,13 +5459,29 @@ async function processActionQueue() {
                             const blazePowder = bot.inventory.items().find(i => i.name === 'blaze_powder');
                             if (blazePowder) await brewingStand.putFuel(blazePowder.type, null, 1);
 
-                            // Add ingredient
+                            // Place base (water bottles or base potions) into the three potion slots.
+                            // In Minecraft, water_bottle and awkward_potion are both stored as the
+                            // 'potion' item with different NBT {Potion:"minecraft:water/awkward"}.
+                            // We search by the base name first; if not found, fall back to 'potion'.
+                            const baseItemId = bot.registry.itemsByName[recipe.base]?.id
+                                             ?? bot.registry.itemsByName['potion']?.id;
+                            if (baseItemId !== undefined) {
+                                const baseItems = bot.inventory.items().filter(i => i.type === baseItemId);
+                                const toDeposit = Math.min(baseItems.reduce((s, i) => s + i.count, 0), 3);
+                                if (toDeposit > 0) {
+                                    await brewingStand.deposit(baseItemId, null, toDeposit);
+                                } else {
+                                    console.log(`[Actuator] brew: no base item (${recipe.base}) in inventory`);
+                                }
+                            }
+
+                            // Add ingredient (top slot)
                             const ingredientId = bot.registry.itemsByName[recipe.ingredient]?.id;
                             const ingredient = ingredientId !== undefined ? bot.inventory.items().find(i => i.type === ingredientId) : null;
                             if (ingredient) await brewingStand.putIngredient(ingredient.type, null, 1);
 
                             bot.chat(`[System] Brewing ${potionKey} potion...`);
-                            // Wait for brewing to complete (~20 seconds)
+                            // Wait for brewing to complete (~20 seconds per cycle, Minecraft spec)
                             await new Promise(r => setTimeout(r, Math.min(22000, timeoutMs - 3000)));
                             brewingStand.close();
                             process.send({ type: 'USER_CHAT', data: { username: "System", message: `Successfully brewed ${potionKey}.`, environment: getEnvironmentContext() } });
