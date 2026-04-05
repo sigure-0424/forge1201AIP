@@ -1,161 +1,26 @@
 {
-  "timestamp": "2026-04-02T17:43:09.241Z",
+  "timestamp": "2026-04-05T03:57:48.402Z",
   "ready": true,
   "position": {
-    "x": 26.7,
-    "y": 58.2,
-    "z": -104.3
+    "x": -384.5,
+    "y": 66,
+    "z": -532.5
   },
   "health": 20,
   "food": 20,
-  "dimension": "the_end",
+  "dimension": "overworld",
   "isExecuting": true,
-  "actionQueue": [],
+  "currentAction": "equip_armor",
+  "actionQueue": [
+    {
+      "action": "equip_armor"
+    }
+  ],
   "treeDir": null,
   "inventory": [
     {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "water_bucket",
-      "count": 1
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
       "name": "unknown",
       "count": 1
-    },
-    {
-      "name": "createbigcannons:flowing_molten_nethersteel",
-      "count": 2
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
-    },
-    {
-      "name": "createbigcannons:built_up_heating",
-      "count": 64
     }
   ],
   "armor": {
@@ -163,6 +28,6 @@
     "torso": null,
     "legs": null,
     "feet": null,
-    "hand": "createbigcannons:built_up_heating"
+    "hand": null
   }
 }

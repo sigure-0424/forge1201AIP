@@ -187,6 +187,30 @@ let _treeDir = null; // { dx, dz } unit vector, or null if unknown
 // Actions arriving before bot is ready are buffered and flushed after spawn.
 let _botReady = false;
 let _pendingIpcActions = [];
+// Latest external player snapshots relayed from /api/entity_updates via parent IPC.
+// Used as a fallback when target entities are temporarily out of render range.
+const _externalPlayerPositions = new Map(); // playerName -> { x, y, z, dimension, updatedAt }
+let _lastBridgeFailureReason = null;
+
+function _normPlayerName(name) {
+    return String(name || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]/g, '');
+}
+
+function getTrackedPlayerSnapshot(name) {
+    if (!name) return null;
+    const direct = _externalPlayerPositions.get(name);
+    if (direct) return direct;
+    const needle = _normPlayerName(name);
+    for (const [playerName, snapshot] of _externalPlayerPositions.entries()) {
+        const cand = _normPlayerName(playerName);
+        if (cand === needle) return snapshot;
+        if (cand.includes(needle) || needle.includes(cand)) return snapshot;
+    }
+    return null;
+}
 
 bot.on('spawn', async () => {
     console.log(`[Actuator] Bot spawned. Initializing physics and pathfinder...`);
@@ -206,8 +230,9 @@ bot.on('spawn', async () => {
     movements.allowSprinting = false;
     movements.liquidCost = 3;
     movements.allow1by1towers = true;
-    // Issue 7: Lower drop down height to reduce random fall damage
-    movements.maxDropDown = 3;
+    // Reduce accidental hole drops on flat terrain.
+    movements.maxDropDown = 1;
+    if ('allowParkour' in movements) movements.allowParkour = false;
 
     // Use cheap vanilla blocks for scaffolding
     movements.scafoldingBlocks = [
@@ -264,11 +289,9 @@ bot.on('spawn', async () => {
     }
 
     bot.pathfinder.setMovements(movements);
-    // Issue 6: Increase think timeout to give A* more time to find bridge connections
-    bot.pathfinder.thinkTimeout = 15000;
-    // tickTimeout: ms of A* work per game tick.
-    // 10 ms matches the original working configuration (commit 00fe7ea).
-    bot.pathfinder.tickTimeout = 10;
+    // Keep path planning responsive around gaps/void edges.
+    bot.pathfinder.thinkTimeout = 5000;
+    bot.pathfinder.tickTimeout = 5;
 
     // Only register event handlers ONCE to prevent accumulation on respawn
     if (!_spawnInitDone) {
@@ -487,7 +510,7 @@ bot.on('spawn', async () => {
         let _evasionCooldown = 0;
         let _evasionDodging = false;
         const DODGE_CONTROLS = ['right', 'left', 'back', 'forward']; // index maps to dodgeAngles order
-        setInterval(() => {
+        setInterval(async () => {
             if (!bot.entity || bot.health <= 0) return;
             if (!bot._client?.socket?.writable) return;
             const now = Date.now();
@@ -508,6 +531,18 @@ bot.on('spawn', async () => {
                 return dot > 0.2;
             });
             if (!incomingProj) return;
+
+            // Shulker bullets can chain-lift forever. Try to break them first.
+            const projName = (incomingProj.name || '').toLowerCase();
+            if (projName === 'shulker_bullet' && bot.entity.position.distanceTo(incomingProj.position) <= 5) {
+                try {
+                    await equipBestWeapon();
+                    bot.attack(incomingProj);
+                    _evasionCooldown = now + 350;
+                    return;
+                } catch (_) {}
+            }
+
             // Raise shield first (highest priority)
             try {
                 const offSlot = bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')];
@@ -944,6 +979,7 @@ bot.on('spawn', async () => {
                 food: Math.round(bot.food),
                 dimension: bot.game?.dimension || 'overworld',
                 isExecuting,
+                currentAction,
                 actionQueue: [...actionQueue],
                 treeDir: _treeDir,
                 inventory: invItems.map(i => ({ name: i.name, count: i.count })),
@@ -1326,24 +1362,83 @@ function getPathCacheKey(destX, destZ, dimension) {
 // Structure name → minecraft:id mapping for /locate command
 const STRUCTURE_NAMES = {
     'fortress': 'fortress', 'nether_fortress': 'fortress',
+    'nether fortress': 'fortress', 'netherfortress': 'fortress',
     'stronghold': 'stronghold',
     'mansion': 'mansion', 'woodland_mansion': 'mansion',
+    'woodland mansion': 'mansion',
     'village': 'village',
     'monument': 'monument', 'ocean_monument': 'monument',
+    'ocean monument': 'monument',
     'desert_pyramid': 'desert_pyramid', 'desert_temple': 'desert_pyramid',
+    'desert pyramid': 'desert_pyramid', 'desert temple': 'desert_pyramid',
     'jungle_pyramid': 'jungle_temple', 'jungle_temple': 'jungle_temple',
+    'jungle pyramid': 'jungle_temple', 'jungle temple': 'jungle_temple',
     'ruined_portal': 'ruined_portal',
+    'ruined portal': 'ruined_portal',
     'shipwreck': 'shipwreck',
     'pillager_outpost': 'pillager_outpost',
+    'pillager outpost': 'pillager_outpost',
     'bastion_remnant': 'bastion_remnant',
+    'bastion remnant': 'bastion_remnant',
     'end_city': 'end_city',
+    'end city': 'end_city', 'endcity': 'end_city',
     'igloo': 'igloo',
     'swamp_hut': 'swamp_hut',
+    'swamp hut': 'swamp_hut',
     'ocean_ruin': 'ocean_ruin',
+    'ocean ruin': 'ocean_ruin',
     'buried_treasure': 'buried_treasure',
+    'buried treasure': 'buried_treasure',
     'ancient_city': 'ancient_city',
+    'ancient city': 'ancient_city',
     'trail_ruins': 'trail_ruins',
+    'trail ruins': 'trail_ruins',
 };
+
+function normalizeStructureTarget(target) {
+    return String(target || '')
+        .toLowerCase()
+        .replace(/^minecraft:/, '')
+        .replace(/[\s-]+/g, '_')
+        .replace(/[^a-z0-9_]/g, '')
+        .trim();
+}
+
+async function waitForLocateResult(timeoutMs = 12000) {
+    return await new Promise((resolve) => {
+        const done = (result) => {
+            clearTimeout(timeout);
+            bot.removeListener('messagestr', onMessageStr);
+            bot.removeListener('message', onMessageJson);
+            resolve(result);
+        };
+        const tryExtract = (text) => {
+            const msg = String(text || '');
+            const xz = msg.match(/\[X:\s*(-?\d+)[^\]]*Z:\s*(-?\d+)\]/i)
+                || msg.match(/x\s*[:=]\s*(-?\d+).{0,40}z\s*[:=]\s*(-?\d+)/i);
+            if (xz) {
+                return { x: parseInt(xz[1], 10), z: parseInt(xz[2], 10) };
+            }
+            if (/could not find|not find|no structure|cannot locate/i.test(msg)) {
+                return { error: msg };
+            }
+            return null;
+        };
+        const onMessageStr = (message) => {
+            const found = tryExtract(message);
+            if (found) done(found);
+        };
+        const onMessageJson = (jsonMsg) => {
+            const text = typeof jsonMsg?.toString === 'function' ? jsonMsg.toString() : '';
+            const found = tryExtract(text);
+            if (found) done(found);
+        };
+
+        const timeout = setTimeout(() => done(null), timeoutMs);
+        bot.on('messagestr', onMessageStr);
+        bot.on('message', onMessageJson);
+    });
+}
 
 // ─── Looted chest tracking (prevents re-looting same chest) ────────────────────
 const _lootedChests = new Set();
@@ -1357,6 +1452,7 @@ let _lavaEscapeActive = false;
 let actionQueue = [];
 let currentCancelToken = { cancelled: false };
 let isExecuting = false;
+let currentAction = null;
 let movements = null; // initialized in 'spawn'
 // Issue 6: _inStopMode prevents auto-idle-combat loop after explicit stop.
 // Cleared on any new EXECUTE_ACTION that isn't pure stop.
@@ -1369,6 +1465,17 @@ let _inStopMode = false;
 // excluded because replaying them after a partial execution would be incorrect.
 const QUEUE_CHECKPOINT_FILE = path.join(process.cwd(), 'data', `queue_checkpoint_${botId}.json`);
 const NON_RESUMABLE_ACTIONS = new Set(['give', 'smelt', 'brew', 'enchant', 'activate_end_portal', 'place_pattern', 'place', 'sleep', 'find_land', 'find_and_equip', 'loot_chest_special']);
+
+// ─── Aviation: Jetpack Mod Registry ───────────────────────────────────────────
+// Maps mod namespace → control config. itemPattern matches the local item name
+// (part after ':' in the full Minecraft item ID). ascendControl is the Mineflayer
+// control state to hold for upward thrust. Add entries when new jetpack mods appear.
+const JETPACK_MOD_REGISTRY = {
+    simplyjetpacks2:  { itemPattern: /jetpack/i, ascendControl: 'jump' },
+    simplerjetpacks2: { itemPattern: /jetpack/i, ascendControl: 'jump' },
+    // Generic fallback: covers any mod item with "jetpack" in the local name.
+    _generic:         { itemPattern: /jetpack/i, ascendControl: 'jump' },
+};
 
 // ─── Blackboard (Change 2) ────────────────────────────────────────────────────
 const BLACKBOARD_FILE = path.join(process.cwd(), 'data', 'blackboard.json');
@@ -1668,10 +1775,35 @@ function chooseBridgeBlock(preferredName) {
     const items = bot.inventory.items();
     if (!items || items.length === 0) return null;
 
+    const blockKeyFromItemName = (rawName) => {
+        const n = (rawName || '').toLowerCase();
+        if (!n) return null;
+        if (bot.registry.blocksByName[n]) return n;
+        const short = n.includes(':') ? n.split(':').pop() : n;
+        if (short && bot.registry.blocksByName[short]) return short;
+        return null;
+    };
+
+    const isClearlyNonPlaceable = (name) => {
+        const n = (name || '').toLowerCase();
+        if (!n) return true;
+        if (n.includes('sword') || n.includes('pickaxe') || n.includes('axe') ||
+            n.includes('shovel') || n.includes('hoe') || n.includes('helmet') ||
+            n.includes('chestplate') || n.includes('leggings') || n.includes('boots') ||
+            n.includes('elytra') || n.includes('jetpack') || n.includes('bow') || n.includes('crossbow') ||
+            n.includes('trident') || n.includes('arrow') || n.includes('bucket') ||
+            n.includes('boat') || n.includes('minecart') || n.includes('food') ||
+            n.includes('potion') || n.includes('torch') || n.includes('rail')) {
+            return true;
+        }
+        return false;
+    };
+
     const isGoodBridgeBlock = (item) => {
         const name = (item?.name || '').toLowerCase();
         if (!name) return false;
-        if (!bot.registry.blocksByName[name]) return false;
+        if (isClearlyNonPlaceable(name)) return false;
+        const hasBlockMapping = !!blockKeyFromItemName(name);
         if (name.includes('slab') || name.includes('stair') || name.includes('wall') ||
             name.includes('fence') || name.includes('door') || name.includes('trapdoor') ||
             name.includes('pane') || name.includes('torch') || name.includes('carpet') ||
@@ -1679,7 +1811,8 @@ function chooseBridgeBlock(preferredName) {
             name.includes('bucket') || name.includes('bed') || name.includes('boat')) {
             return false;
         }
-        return true;
+        // Prefer items known to map to a block, but allow modded unknowns as fallback.
+        return hasBlockMapping || name.includes(':');
     };
 
     if (preferredNeedle) {
@@ -1690,9 +1823,29 @@ function chooseBridgeBlock(preferredName) {
         if (preferred) return preferred;
     }
 
-    return items
+    const candidates = items
         .filter(isGoodBridgeBlock)
+        .sort((a, b) => b.count - a.count);
+
+    if (candidates.length > 0) return candidates[0];
+
+    // Last-resort fallback: try any non-obviously-non-placeable stack, highest count first.
+    const fallback = items
+        .filter(i => !isClearlyNonPlaceable(i?.name))
         .sort((a, b) => b.count - a.count)[0] || null;
+
+    if (!fallback) {
+        const snapshot = items
+            .slice(0, 12)
+            .map(i => {
+                const n = i?.name || 'unknown';
+                return `${n}x${i?.count || 0}[blk:${blockKeyFromItemName(n) ? 'Y' : 'N'}]`;
+            })
+            .join(', ');
+        console.log(`[Actuator] chooseBridgeBlock: no candidate found. Inventory snapshot: ${snapshot}`);
+    }
+
+    return fallback;
 }
 
 function hasForwardGap(angleRad) {
@@ -1709,54 +1862,300 @@ function hasForwardGap(angleRad) {
     }
 }
 
+// Broader bridge trigger for edge cases where ground shape confuses hasForwardGap().
+function hasLikelyBridgeNeed(angleRad) {
+    try {
+        const pos = bot.entity.position;
+        const by = Math.floor(pos.y);
+        const ux = Math.cos(angleRad);
+        const uz = Math.sin(angleRad);
+        for (let step = 1; step <= 2; step++) {
+            const bx = Math.floor(pos.x + step * ux);
+            const bz = Math.floor(pos.z + step * uz);
+            const foot = bot.blockAt(new Vec3(bx, by, bz));
+            const below1 = bot.blockAt(new Vec3(bx, by - 1, bz));
+            const below2 = bot.blockAt(new Vec3(bx, by - 2, bz));
+            const below3 = bot.blockAt(new Vec3(bx, by - 3, bz));
+            const noFooting = isAirLikeBlock(foot) && isAirLikeBlock(below1) && isAirLikeBlock(below2);
+            const deepDrop = isAirLikeBlock(below1) && isAirLikeBlock(below2) && isAirLikeBlock(below3);
+            if (noFooting || deepDrop) return true;
+        }
+    } catch (_) {}
+    return false;
+}
+
+async function tryElytraGapCross(angleRad) {
+    try {
+        const torso = bot.inventory.slots[bot.getEquipmentDestSlot('torso')];
+        if (!torso || torso.name !== 'elytra') return false;
+        const rocket = bot.inventory.items().find(i => i.name === 'firework_rocket');
+        if (!rocket) return false;
+
+        bot.pathfinder.setGoal(null);
+        bot.clearControlStates();
+        try { await bot.equip(rocket, 'hand'); } catch (_) {}
+
+        const tx = bot.entity.position.x + 18 * Math.cos(angleRad);
+        const tz = bot.entity.position.z + 18 * Math.sin(angleRad);
+        try { await bot.lookAt(new Vec3(tx, bot.entity.position.y + 2, tz), true); } catch (_) {}
+
+        if (bot.entity.onGround) {
+            bot.setControlState('jump', true);
+            await new Promise(r => setTimeout(r, 220));
+            bot.setControlState('jump', false);
+            await new Promise(r => setTimeout(r, 120));
+        }
+
+        try {
+            if (bot._client && bot.entity?.id !== undefined) {
+                bot._client.write('entity_action', { entityId: bot.entity.id, actionId: 8, jumpBoost: 0 });
+            }
+        } catch (_) {}
+
+        bot.setControlState('forward', true);
+        bot.setControlState('sprint', true);
+        try { bot.activateItem(); } catch (_) {}
+        await new Promise(r => setTimeout(r, 900));
+        bot.setControlState('forward', false);
+        bot.setControlState('sprint', false);
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+// ── Aviation helpers ──────────────────────────────────────────────────────────
+
+// Inspects the item currently in the torso slot and returns:
+//   'elytra'                             → vanilla Elytra
+//   { type:'jetpack', mod, config }      → modded Jetpack (dynamic dispatch via JETPACK_MOD_REGISTRY)
+//   null                                 → no recognised aviation device
+function detectAviationMethod(torsoItem) {
+    if (!torsoItem) return null;
+    if (torsoItem.name === 'elytra') return 'elytra';
+    const rawName = torsoItem.name || '';
+    const colonIdx = rawName.indexOf(':');
+    const namespace = colonIdx >= 0 ? rawName.slice(0, colonIdx) : null;
+    const localName = colonIdx >= 0 ? rawName.slice(colonIdx + 1) : rawName;
+    // Explicit mod registry lookup.
+    const cfg = namespace ? JETPACK_MOD_REGISTRY[namespace] : null;
+    if (cfg && cfg.itemPattern.test(localName)) {
+        return { type: 'jetpack', mod: namespace, config: cfg };
+    }
+    // Generic fallback — covers any mod whose namespace is not listed above.
+    if (JETPACK_MOD_REGISTRY._generic.itemPattern.test(localName)) {
+        return { type: 'jetpack', mod: namespace || 'unknown', config: JETPACK_MOD_REGISTRY._generic };
+    }
+    return null;
+}
+
+// Fly to (destX, destY, destZ) using a jetpack.
+// Phase 1: rise to target altitude using the mod's ascendControl (default: jump).
+// Phase 2: navigate horizontally while holding thrust.
+// Phase 3: release thrust and descend.
+async function flyWithJetpack(destX, destY, destZ, config, cancelToken) {
+    const ctrl = config.ascendControl || 'jump';
+    const targetY = destY !== null ? destY : bot.entity.position.y;
+
+    bot.chat(`[System] Jetpack engaging — heading to X:${Math.round(destX)} Y:${Math.round(targetY)} Z:${Math.round(destZ)}.`);
+    bot.pathfinder.setGoal(null);
+
+    // Phase 1: Ascend to target altitude.
+    bot.setControlState(ctrl, true);
+    const riseDeadline = Date.now() + 15000;
+    while (bot.entity.position.y < targetY - 0.5 && Date.now() < riseDeadline && !cancelToken.cancelled) {
+        await new Promise(r => setTimeout(r, 100));
+    }
+
+    // Phase 2: Horizontal navigation while holding thrust.
+    bot.setControlState('forward', true);
+    bot.setControlState('sprint', true);
+    const horizDeadline = Date.now() + 90000;
+    while (Date.now() < horizDeadline && !cancelToken.cancelled) {
+        const dx = destX - bot.entity.position.x;
+        const dz = destZ - bot.entity.position.z;
+        if (Math.sqrt(dx * dx + dz * dz) < 3) break;
+        // Altitude regulation: release thrust briefly if above target, re-engage if below.
+        if (bot.entity.position.y > targetY + 3) {
+            bot.setControlState(ctrl, false);
+        } else {
+            bot.setControlState(ctrl, true);
+        }
+        try { await bot.lookAt(new Vec3(destX, bot.entity.position.y, destZ), true); } catch (_) {}
+        await new Promise(r => setTimeout(r, 150));
+    }
+
+    // Phase 3: Release thrust and descend to ground.
+    bot.setControlState(ctrl, false);
+    bot.setControlState('forward', false);
+    bot.setControlState('sprint', false);
+    const landDeadline = Date.now() + 10000;
+    while (!bot.entity.onGround && Date.now() < landDeadline && !cancelToken.cancelled) {
+        await new Promise(r => setTimeout(r, 100));
+    }
+    bot.clearControlStates();
+}
+
+// Fly to (destX, destY, destZ) using an Elytra + firework rockets.
+// Launches into glide, fires a rocket for propulsion, and steers toward the destination.
+async function flyWithElytra(destX, destY, destZ, cancelToken) {
+    const rocket = bot.inventory.items().find(i => i.name === 'firework_rocket');
+    if (!rocket) {
+        bot.chat('[System Error] No firework rockets — cannot launch Elytra.');
+        return false;
+    }
+
+    bot.chat(`[System] Elytra launch — heading to X:${Math.round(destX)} Y:${Math.round(destY)} Z:${Math.round(destZ)}.`);
+    bot.pathfinder.setGoal(null);
+    bot.clearControlStates();
+
+    try { await bot.lookAt(new Vec3(destX, destY, destZ), true); } catch (_) {}
+
+    // Jump → open Elytra (entity_action id 8) → rocket boost.
+    if (bot.entity.onGround) {
+        bot.setControlState('jump', true);
+        await new Promise(r => setTimeout(r, 220));
+        bot.setControlState('jump', false);
+        await new Promise(r => setTimeout(r, 120));
+    }
+    try {
+        if (bot._client && bot.entity?.id !== undefined) {
+            bot._client.write('entity_action', { entityId: bot.entity.id, actionId: 8, jumpBoost: 0 });
+        }
+    } catch (_) {}
+    try { await bot.equip(rocket, 'hand'); } catch (_) {}
+    bot.setControlState('forward', true);
+    bot.setControlState('sprint', true);
+    try { bot.activateItem(); } catch (_) {}
+
+    // Glide toward destination, re-boosting when speed drops.
+    const deadline = Date.now() + 90000;
+    while (Date.now() < deadline && !cancelToken.cancelled) {
+        const dx = destX - bot.entity.position.x;
+        const dz = destZ - bot.entity.position.z;
+        if (Math.sqrt(dx * dx + dz * dz) < 5) break;
+        try { await bot.lookAt(new Vec3(destX, destY, destZ), true); } catch (_) {}
+        const vel = bot.entity.velocity;
+        const speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
+        if (speed < 0.3) {
+            const r2 = bot.inventory.items().find(i => i.name === 'firework_rocket');
+            if (r2) { try { await bot.equip(r2, 'hand'); bot.activateItem(); } catch (_) {} }
+        }
+        await new Promise(r => setTimeout(r, 500));
+    }
+
+    bot.setControlState('forward', false);
+    bot.setControlState('sprint', false);
+    const landDeadline = Date.now() + 10000;
+    while (!bot.entity.onGround && Date.now() < landDeadline && !cancelToken.cancelled) {
+        await new Promise(r => setTimeout(r, 100));
+    }
+    bot.clearControlStates();
+    return true;
+}
+
 async function tryBridgeForward(angleRad, preferredName, maxPlacements = 3) {
+    _lastBridgeFailureReason = null;
     const bridgeBlock = chooseBridgeBlock(preferredName);
     if (!bridgeBlock) {
+        _lastBridgeFailureReason = 'no_block';
         bot.chat('[System Error] Cannot bridge: no placeable blocks in inventory.');
         return false;
     }
 
-    await bot.equip(bridgeBlock, 'hand');
+    // Stop pathfinder and all movement during placement to prevent bot from
+    // walking into the void while awaiting async placeBlock calls.
+    bot.pathfinder.setGoal(null);
+    bot.clearControlStates();
+    bot.setControlState('sneak', true);
+
+    try {
+        await bot.equip(bridgeBlock, 'hand');
+    } catch (_) { /* equip might fail if already holding it */ }
+
     const base = bot.entity.position;
     const by = Math.floor(base.y);
     const ux = Math.cos(angleRad);
     const uz = Math.sin(angleRad);
 
+    // Prioritise the face pointing back toward the bot (toward source solid ground).
+    // For axis-aligned cardinal movement, the dominant backward cardinal face is tried first.
+    // Then all other standard faces are tried as fallbacks.
+    const dominantFace = () => {
+        // Pick the axis with the larger component and invert it (backward direction).
+        if (Math.abs(ux) >= Math.abs(uz)) {
+            return new Vec3(ux > 0 ? -1 : 1, 0, 0);
+        }
+        return new Vec3(0, 0, uz > 0 ? -1 : 1);
+    };
+    const df = dominantFace();
+    const backwardFaces = [
+        df,
+        new Vec3(1, 0, 0),
+        new Vec3(-1, 0, 0),
+        new Vec3(0, 0, 1),
+        new Vec3(0, 0, -1),
+        new Vec3(0, 1, 0),
+        new Vec3(0, -1, 0),
+    ].filter((f, i, arr) =>
+        i === 0 || !(f.x === arr[0].x && f.y === arr[0].y && f.z === arr[0].z)
+    );
+
+    let placedCount = 0;
     for (let step = 1; step <= maxPlacements; step++) {
         const tx = Math.floor(base.x + step * ux);
         const tz = Math.floor(base.z + step * uz);
         const target = new Vec3(tx, by - 1, tz);
         const existing = bot.blockAt(target);
-        if (isSolidBridgeSupport(existing)) continue;
-
-        const faces = [
-            new Vec3(0, 1, 0),
-            new Vec3(1, 0, 0),
-            new Vec3(-1, 0, 0),
-            new Vec3(0, 0, 1),
-            new Vec3(0, 0, -1),
-            new Vec3(0, -1, 0),
-        ];
+        if (isSolidBridgeSupport(existing)) { placedCount++; continue; }
 
         let placed = false;
-        for (const face of faces) {
+        for (const face of backwardFaces) {
             const refPos = target.minus(face);
             const refBlock = bot.blockAt(refPos);
             if (!isSolidBridgeSupport(refBlock)) continue;
             try {
                 await withTimeout(bot.placeBlock(refBlock, face), 3000, 'bridge place');
                 placed = true;
+                placedCount++;
                 break;
             } catch (_) {
                 // Try next face
             }
         }
 
-        if (!placed) return false;
-        await new Promise(r => setTimeout(r, 120));
+        if (!placed) break; // Can't place this step — stop here
+        await new Promise(r => setTimeout(r, 150));
     }
 
-    return true;
+    bot.setControlState('sneak', false);
+    if (placedCount > 0) return true;
+    _lastBridgeFailureReason = 'placement_failed';
+    return false;
+}
+
+function _shortItemName(name) {
+    if (!name) return '';
+    const n = String(name).toLowerCase();
+    return n.includes(':') ? n.split(':').pop() : n;
+}
+
+function resolveInventoryItemForTarget(targetName) {
+    const wanted = String(targetName || '').toLowerCase().trim();
+    if (!wanted) return null;
+    const wantedShort = _shortItemName(wanted);
+    const inventory = bot.inventory.items();
+    if (!inventory.length) return null;
+
+    let exact = inventory.find(i => String(i.name || '').toLowerCase() === wanted);
+    if (exact) return exact;
+    exact = inventory.find(i => _shortItemName(i.name) === wantedShort);
+    if (exact) return exact;
+
+    let fuzzy = inventory.find(i => String(i.name || '').toLowerCase().includes(wanted));
+    if (fuzzy) return fuzzy;
+    fuzzy = inventory.find(i => _shortItemName(i.name).includes(wantedShort));
+    return fuzzy || null;
 }
 
 let debouncer = null; // initialized in 'spawn' — used for VeinMiner cascade detection
@@ -1868,6 +2267,8 @@ async function equipBestArmor() {
     for (const [slot, piece] of Object.entries(ARMOR_PIECES)) {
         const destSlot = bot.getEquipmentDestSlot(slot);
         const currentEquipped = bot.inventory.slots[destSlot];
+        // Keep Elytra or any jetpack equipped unless explicitly swapped by a direct equip action.
+        if (slot === 'torso' && detectAviationMethod(currentEquipped)) continue;
         // Index of currently equipped tier (lower = better; ARMOR_TIERS.length = nothing equipped)
         const currentTierIdx = currentEquipped
             ? ARMOR_TIERS.findIndex(t => currentEquipped.name === `${t}_${piece}`)
@@ -1909,6 +2310,148 @@ function getEquipmentContainerIds() {
         if (key === 'shulker_box' || key.endsWith('_shulker_box')) ids.push(reg[key].id);
     }
     return ids;
+}
+
+function _normalizeContainerKind(raw) {
+    const t = String(raw || '').toLowerCase();
+    if (t.includes('shulker') || t.includes('シュルカー')) return 'shulker';
+    if (t.includes('barrel') || t.includes('バレル')) return 'barrel';
+    if (t.includes('chest') || t.includes('チェスト') || t.includes('箱')) return 'chest';
+    return 'container';
+}
+
+function _normalizeItemTargetName(raw) {
+    const text = String(raw || '').toLowerCase().trim();
+    if (!text) return '';
+    const aliases = [
+        { re: /(滑らかな石|smooth[_\s-]?stone|smoothstone)/i, id: 'smooth_stone' },
+        { re: /(丸石|cobblestone|cobble)/i, id: 'cobblestone' },
+        { re: /(石|stone)/i, id: 'stone' },
+        { re: /(原木|log)/i, id: 'oak_log' }
+    ];
+    for (const a of aliases) {
+        if (a.re.test(text)) return a.id;
+    }
+    return text.replace(/[\s-]+/g, '_');
+}
+
+function _isContainerBlockByName(name) {
+    const n = String(name || '').toLowerCase();
+    return n === 'chest' || n === 'trapped_chest' || n === 'barrel' ||
+           n === 'shulker_box' || n.endsWith('_shulker_box');
+}
+
+function _getContainerBlockIds(kind = 'container') {
+    const reg = bot.registry.blocksByName || {};
+    const ids = new Set();
+    const k = _normalizeContainerKind(kind);
+    for (const [name, info] of Object.entries(reg)) {
+        if (!info || info.id === undefined) continue;
+        const n = String(name || '').toLowerCase();
+        if (k === 'chest' && (n === 'chest' || n === 'trapped_chest')) ids.add(info.id);
+        else if (k === 'barrel' && n === 'barrel') ids.add(info.id);
+        else if (k === 'shulker' && (n === 'shulker_box' || n.endsWith('_shulker_box'))) ids.add(info.id);
+        else if (k === 'container' && _isContainerBlockByName(n)) ids.add(info.id);
+    }
+    return [...ids];
+}
+
+function _resolveContainerCoords(action) {
+    const candidates = _listContainerCandidates(action);
+    return candidates.length > 0 ? candidates[0] : null;
+}
+
+function _listContainerCandidates(action) {
+    const hasExplicit = [action.x, action.y, action.z].every(v => v !== undefined && v !== null && Number.isFinite(Number(v)));
+    if (hasExplicit) {
+        return [{ x: Number(action.x), y: Number(action.y), z: Number(action.z), via: 'explicit' }];
+    }
+
+    const kind = _normalizeContainerKind(action.container || action.target || 'container');
+    const requestedMax = Number.isFinite(Number(action.distance)) ? Number(action.distance) : 96;
+    const maxDistance = Math.max(16, Math.min(192, requestedMax));
+    const ids = _getContainerBlockIds(kind);
+    if (ids.length === 0) return [];
+
+    const positions = [];
+    const seen = new Set();
+    const radii = [Math.min(32, maxDistance), Math.min(64, maxDistance), Math.min(96, maxDistance), maxDistance]
+        .filter((v, i, arr) => v > 0 && arr.indexOf(v) === i)
+        .sort((a, b) => a - b);
+    for (const r of radii) {
+        const found = bot.findBlocks({ matching: ids, maxDistance: r, count: 256 }) || [];
+        for (const p of found) {
+            const key = `${p.x},${p.y},${p.z}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            positions.push(p);
+        }
+        // Collect more than one candidate so actions can continue when first chest misses.
+        if (positions.length >= 8) break;
+    }
+    if (!positions.length) return [];
+
+    return positions
+        .map(p => ({
+            x: p.x,
+            y: p.y,
+            z: p.z,
+            via: `nearest_${kind}`,
+            _dist: bot.entity.position.distanceTo(new Vec3(p.x, p.y, p.z))
+        }))
+        .sort((a, b) => a._dist - b._dist)
+        .map(({ _dist, ...rest }) => rest);
+}
+
+function _resolveTargetItemIds(itemTargetName) {
+    const normalized = _normalizeItemTargetName(itemTargetName);
+    const ids = [];
+    const targetGroup = MATERIAL_TAG_GROUPS[normalized];
+    if (targetGroup) {
+        for (const n of targetGroup) {
+            const id = bot.registry.itemsByName[n]?.id || bot.registry.blocksByName[n]?.id;
+            if (id !== undefined) ids.push(id);
+        }
+    } else {
+        const id = bot.registry.itemsByName[normalized]?.id || bot.registry.blocksByName[normalized]?.id;
+        if (id !== undefined) ids.push(id);
+    }
+    return ids;
+}
+
+async function _withdrawFromOpenedContainer(containerWindow, neededIds, quantity) {
+    let taken = 0;
+    while (taken < quantity && !currentCancelToken.cancelled) {
+        const currentItems = containerWindow.containerItems();
+        const match = currentItems.find(i => neededIds.includes(i.type));
+        if (!match) break;
+        const amountToTake = Math.min(match.count, quantity - taken);
+        try {
+            await containerWindow.withdraw(match.type, null, amountToTake);
+            taken += amountToTake;
+        } catch (_) {
+            break;
+        }
+    }
+    return taken;
+}
+
+async function _depositToOpenedContainer(containerWindow, neededIds, quantity, itemTargetName) {
+    let moved = 0;
+    while (moved < quantity && !currentCancelToken.cancelled) {
+        const inv = bot.inventory.items();
+        const stack = inv.find(i => neededIds.includes(i.type)) ||
+            inv.find(i => String(i.name || '').toLowerCase().includes(String(itemTargetName || '').toLowerCase()));
+        if (!stack) break;
+        const amount = Math.min(stack.count, quantity - moved);
+        try {
+            await containerWindow.deposit(stack.type, null, amount);
+            moved += amount;
+        } catch (_) {
+            break;
+        }
+    }
+    return moved;
 }
 
 /**
@@ -2538,6 +3081,7 @@ async function processActionQueue() {
 
         try {
             if (!action || !action.action) continue;
+            currentAction = action.action;
             if (currentCancelToken.cancelled) break;
 
             // Guard: if the server connection is dead, don't try to send packets.
@@ -2587,68 +3131,39 @@ async function processActionQueue() {
 
             // ── withdraw_from_container ───────────────────────────────────────
             } else if (action.action === 'withdraw_from_container') {
-                const tx = action.x !== undefined ? parseFloat(action.x) : null;
-                const ty = action.y !== undefined ? parseFloat(action.y) : null;
-                const tz = action.z !== undefined ? parseFloat(action.z) : null;
-                const itemTargetName = action.item || action.target;
-                const quantity = parseInt(action.quantity, 10) || 1;
+                const candidates = _listContainerCandidates(action);
+                const itemTargetName = _normalizeItemTargetName(action.item || action.target);
+                const quantity = Math.max(1, parseInt(action.quantity, 10) || 1);
 
-                if (tx === null || ty === null || tz === null || !itemTargetName) {
+                if (candidates.length === 0 || !itemTargetName) {
                     bot.chat(`[System Error] Missing target, item, or coordinates for withdraw_from_container.`);
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: 'Missing target, item, or coordinates for withdraw_from_container.', environment: getEnvironmentContext() } });
                 } else {
-                    bot.chat(`[System] Heading to container at (${tx}, ${ty}, ${tz}) to get ${quantity} ${itemTargetName}...`);
+                    bot.chat(`[System] Checking nearby containers for ${quantity} ${itemTargetName}...`);
                     try {
-                        await withTimeout(bot.pathfinder.goto(new goals.GoalNear(tx, ty, tz, 2)), 30000, 'goto container', () => bot.pathfinder.setGoal(null));
-                        const block = bot.blockAt(new Vec3(tx, ty, tz));
-                        const bname = block?.name || '';
-                        const isContainer = bname === 'chest' || bname === 'barrel' ||
-                                            bname === 'shulker_box' || bname.endsWith('_shulker_box');
-
-                        if (block && isContainer) {
+                        const neededIds = _resolveTargetItemIds(itemTargetName);
+                        let takenTotal = 0;
+                        let checked = 0;
+                        for (const c of candidates) {
+                            if (currentCancelToken.cancelled || takenTotal >= quantity) break;
+                            checked++;
+                            await withTimeout(bot.pathfinder.goto(new goals.GoalNear(c.x, c.y, c.z, 2)), 30000, 'goto container', () => bot.pathfinder.setGoal(null));
+                            const block = bot.blockAt(new Vec3(c.x, c.y, c.z));
+                            const bname = block?.name || '';
+                            const isContainer = _isContainerBlockByName(bname);
+                            if (!block || !isContainer) continue;
                             const containerWindow = await bot.openContainer(block);
-                            let taken = 0;
-                            const neededIds = [];
-
-                            // Determine item IDs to search for
-                            const targetGroup = MATERIAL_TAG_GROUPS[itemTargetName];
-                            if (targetGroup) {
-                                for (const n of targetGroup) {
-                                    const id = bot.registry.itemsByName[n]?.id || bot.registry.blocksByName[n]?.id;
-                                    if (id !== undefined) neededIds.push(id);
-                                }
-                            } else {
-                                const id = bot.registry.itemsByName[itemTargetName]?.id || bot.registry.blocksByName[itemTargetName]?.id;
-                                if (id !== undefined) neededIds.push(id);
-                            }
-
-                            // We need to re-query the container items after each withdraw because the array changes
-                            while (taken < quantity && !currentCancelToken.cancelled) {
-                                const currentItems = containerWindow.containerItems();
-                                const match = currentItems.find(i => neededIds.includes(i.type));
-                                if (!match) break;
-
-                                const amountToTake = Math.min(match.count, quantity - taken);
-                                try {
-                                    await containerWindow.withdraw(match.type, null, amountToTake);
-                                    taken += amountToTake;
-                                } catch (e) {
-                                    console.log(`[Actuator] withdraw_from_container error: ${e.message}`);
-                                    break;
-                                }
-                            }
+                            const taken = await _withdrawFromOpenedContainer(containerWindow, neededIds, quantity - takenTotal);
                             bot.closeWindow(containerWindow);
+                            takenTotal += taken;
+                        }
 
-                            if (taken > 0) {
-                                bot.chat(`[System] Took ${taken} ${itemTargetName} from container.`);
-                                process.send({ type: 'USER_CHAT', data: { username: "System", message: `Successfully withdrew ${taken} ${itemTargetName}.`, environment: getEnvironmentContext() } });
-                            } else {
-                                bot.chat(`[System Error] Container did not have ${itemTargetName}.`);
-                                process.send({ type: 'USER_CHAT', data: { username: "System", message: `Container did not contain ${itemTargetName}.`, environment: getEnvironmentContext() } });
-                            }
+                        if (takenTotal > 0) {
+                            bot.chat(`[System] Took ${takenTotal}/${quantity} ${itemTargetName} after checking ${checked} container(s).`);
+                            process.send({ type: 'USER_CHAT', data: { username: "System", message: `Successfully withdrew ${takenTotal}/${quantity} ${itemTargetName}.`, environment: getEnvironmentContext() } });
                         } else {
-                            bot.chat(`[System Error] Found ${bname || 'air'} instead of a container.`);
-                            process.send({ type: 'USER_CHAT', data: { username: "System", message: `No container at (${tx}, ${ty}, ${tz}).`, environment: getEnvironmentContext() } });
+                            bot.chat(`[System Error] Nearby containers did not have ${itemTargetName}.`);
+                            process.send({ type: 'USER_CHAT', data: { username: "System", message: `Nearby containers did not contain ${itemTargetName}.`, environment: getEnvironmentContext() } });
                         }
                     } catch(e) {
                         console.log(`[Actuator] Failed to withdraw from container: ${e.message}`);
@@ -2656,6 +3171,119 @@ async function processActionQueue() {
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: `Could not reach container: ${e.message}`, environment: getEnvironmentContext() } });
                     }
                 }
+
+            // ── deposit_to_container / store_in_container ───────────────────
+            } else if (action.action === 'deposit_to_container' || action.action === 'store_in_container') {
+                const candidates = _listContainerCandidates(action);
+                const itemTargetName = _normalizeItemTargetName(action.item || action.target);
+                const quantity = Math.max(1, parseInt(action.quantity, 10) || 1);
+
+                if (candidates.length === 0 || !itemTargetName) {
+                    bot.chat('[System Error] Missing item or container coordinates for deposit_to_container.');
+                    process.send({ type: 'USER_CHAT', data: { username: 'System', message: 'Missing item or container coordinates for deposit_to_container.', environment: getEnvironmentContext() } });
+                } else {
+                    bot.chat(`[System] Checking nearby containers to deposit ${quantity} ${itemTargetName}...`);
+                    try {
+                        const neededIds = _resolveTargetItemIds(itemTargetName);
+                        let movedTotal = 0;
+                        let checked = 0;
+                        for (const c of candidates) {
+                            if (currentCancelToken.cancelled || movedTotal >= quantity) break;
+                            checked++;
+                            await withTimeout(bot.pathfinder.goto(new goals.GoalNear(c.x, c.y, c.z, 2)), 30000, 'goto container for deposit', () => bot.pathfinder.setGoal(null));
+                            const block = bot.blockAt(new Vec3(c.x, c.y, c.z));
+                            const bname = block?.name || '';
+                            const isContainer = _isContainerBlockByName(bname);
+                            if (!block || !isContainer) continue;
+                            const containerWindow = await bot.openContainer(block);
+                            const moved = await _depositToOpenedContainer(containerWindow, neededIds, quantity - movedTotal, itemTargetName);
+                            bot.closeWindow(containerWindow);
+                            movedTotal += moved;
+                        }
+
+                        if (movedTotal > 0) {
+                            bot.chat(`[System] Deposited ${movedTotal}/${quantity} ${itemTargetName} after checking ${checked} container(s).`);
+                            process.send({ type: 'USER_CHAT', data: { username: 'System', message: `Deposited ${movedTotal}/${quantity} ${itemTargetName}.`, environment: getEnvironmentContext() } });
+                        } else {
+                            bot.chat(`[System Error] I could not deposit ${itemTargetName} into nearby containers.`);
+                            process.send({ type: 'USER_CHAT', data: { username: 'System', message: `Could not deposit ${itemTargetName} into nearby containers.`, environment: getEnvironmentContext() } });
+                        }
+                    } catch (e) {
+                        bot.chat('[System Error] Could not deposit into container.');
+                        process.send({ type: 'USER_CHAT', data: { username: 'System', message: `deposit_to_container failed: ${e.message}`, environment: getEnvironmentContext() } });
+                    }
+                }
+
+            // ── transfer_between_containers (multi-trip) ───────────────────
+            } else if (action.action === 'transfer_between_containers') {
+                const itemTargetName = _normalizeItemTargetName(action.item || action.target);
+                const quantity = Math.max(1, parseInt(action.quantity, 10) || 1);
+                const from = action.from || {};
+                const to = action.to || {};
+                const fromAction = {
+                    target: from.target || from.container || action.fromTarget || 'container',
+                    container: from.container,
+                    x: from.x,
+                    y: from.y,
+                    z: from.z,
+                    distance: from.distance || action.distance
+                };
+                const toAction = {
+                    target: to.target || to.container || action.toTarget || 'container',
+                    container: to.container,
+                    x: to.x,
+                    y: to.y,
+                    z: to.z,
+                    distance: to.distance || action.distance
+                };
+
+                const srcCandidates = _listContainerCandidates(fromAction);
+                const dstCandidates = _listContainerCandidates(toAction);
+                if (srcCandidates.length === 0 || dstCandidates.length === 0 || !itemTargetName) {
+                    bot.chat('[System Error] transfer_between_containers requires source, destination, and item.');
+                    process.send({ type: 'USER_CHAT', data: { username: 'System', message: 'transfer_between_containers missing source/destination/item.', environment: getEnvironmentContext() } });
+                    continue;
+                }
+
+                const neededIds = _resolveTargetItemIds(itemTargetName);
+                let remaining = quantity;
+                let movedTotal = 0;
+                let trip = 0;
+                const maxTrips = Math.max(1, parseInt(action.maxTrips, 10) || 64);
+
+                while (remaining > 0 && !currentCancelToken.cancelled && trip < maxTrips) {
+                    trip++;
+                    let taken = 0;
+                    for (const src of srcCandidates) {
+                        if (taken > 0 || currentCancelToken.cancelled) break;
+                        await withTimeout(bot.pathfinder.goto(new goals.GoalNear(src.x, src.y, src.z, 2)), 30000, 'goto source container', () => bot.pathfinder.setGoal(null));
+                        const srcBlock = bot.blockAt(new Vec3(src.x, src.y, src.z));
+                        if (!srcBlock || !_isContainerBlockByName(srcBlock.name)) continue;
+                        const srcWin = await bot.openContainer(srcBlock);
+                        const takeTarget = Math.min(remaining, 1024);
+                        taken = await _withdrawFromOpenedContainer(srcWin, neededIds, takeTarget);
+                        bot.closeWindow(srcWin);
+                    }
+                    if (taken <= 0) break;
+
+                    let moved = 0;
+                    for (const dst of dstCandidates) {
+                        if (moved > 0 || currentCancelToken.cancelled) break;
+                        await withTimeout(bot.pathfinder.goto(new goals.GoalNear(dst.x, dst.y, dst.z, 2)), 30000, 'goto destination container', () => bot.pathfinder.setGoal(null));
+                        const dstBlock = bot.blockAt(new Vec3(dst.x, dst.y, dst.z));
+                        if (!dstBlock || !_isContainerBlockByName(dstBlock.name)) continue;
+                        const dstWin = await bot.openContainer(dstBlock);
+                        moved = await _depositToOpenedContainer(dstWin, neededIds, taken, itemTargetName);
+                        bot.closeWindow(dstWin);
+                    }
+
+                    movedTotal += moved;
+                    remaining -= moved;
+                    if (moved <= 0) break;
+                }
+
+                bot.chat(`[System] Transfer complete: moved ${movedTotal}/${quantity} ${itemTargetName} in ${trip} trip(s).`);
+                process.send({ type: 'USER_CHAT', data: { username: 'System', message: `Transferred ${movedTotal}/${quantity} ${itemTargetName} in ${trip} trip(s).`, environment: getEnvironmentContext() } });
 
             // ── find_and_equip ────────────────────────────────────────────────
             } else if (action.action === 'find_and_equip') {
@@ -2947,7 +3575,8 @@ async function processActionQueue() {
             // in BUGFIX-20260321-002).
             } else if (action.action === 'come') {
                 const targetEntity = bot.players[action.target]?.entity;
-                if (targetEntity) {
+                const tracked = getTrackedPlayerSnapshot(action.target);
+                if (targetEntity || tracked) {
                     // Improvement 2: Disable digging during follow to prevent erratic block mining
                     // while moving. The bot should navigate around obstacles, not through them.
                     const savedCanDigCome = movements ? movements.canDig : true;
@@ -2957,14 +3586,18 @@ async function processActionQueue() {
                     }
 
                     bot.chat(`[System] Following ${action.target}!`);
-                    bot.pathfinder.setGoal(new goals.GoalFollow(targetEntity, 2), true);
+                    if (targetEntity?.isValid) {
+                        bot.pathfinder.setGoal(new goals.GoalFollow(targetEntity, 2), true);
+                    } else {
+                        bot.pathfinder.setGoal(new goals.GoalNear(tracked.x, tracked.y, tracked.z, 3), true);
+                    }
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `Now following ${action.target}.`, environment: getEnvironmentContext() } });
 
                     // Hold the queue slot until a 'stop' command cancels the token.
                     // Also monitor the goal — if something external clears it (e.g. the
                     // pathfinder's own stop(), or a bug), re-set it so following continues.
                     await new Promise(resolve => {
-                        const check = setInterval(() => {
+                        const check = setInterval(async () => {
                             if (currentCancelToken.cancelled) {
                                 clearInterval(check);
                                 bot.pathfinder.setGoal(null);
@@ -2973,7 +3606,31 @@ async function processActionQueue() {
                             }
                             // Re-validate: target still visible?
                             const t = bot.players[action.target]?.entity;
-                            if (!t || !t.isValid) {
+                            let p = getTrackedPlayerSnapshot(action.target);
+                            if (t && t.isValid) {
+                                const dxNow = t.position.x - bot.entity.position.x;
+                                const dzNow = t.position.z - bot.entity.position.z;
+                                const distNow = Math.hypot(dxNow, dzNow);
+                                if (distNow > 2.5) {
+                                    const afNow = Math.atan2(dzNow, dxNow);
+                                    if (!isSafeForward(afNow) && (hasForwardGap(afNow) || hasLikelyBridgeNeed(afNow))) {
+                                        try { await tryBridgeForward(afNow, action.block || action.material, 2); } catch (_) {}
+                                    }
+                                }
+                                if (!(bot.pathfinder.goal instanceof goals.GoalFollow)) {
+                                    bot.pathfinder.setGoal(new goals.GoalFollow(t, 2), true);
+                                }
+                                return;
+                            }
+                            if (p && Date.now() - (p.updatedAt || 0) > 120000) {
+                                for (const [k, v] of _externalPlayerPositions.entries()) {
+                                    if (v === p || _normPlayerName(k) === _normPlayerName(action.target)) {
+                                        _externalPlayerPositions.delete(k);
+                                    }
+                                }
+                                p = null;
+                            }
+                            if (!p) {
                                 clearInterval(check);
                                 bot.pathfinder.setGoal(null);
                                 bot.chat(`[System Error] Lost sight of ${action.target}.`);
@@ -2981,11 +3638,30 @@ async function processActionQueue() {
                                 resolve();
                                 return;
                             }
-                            // If the goal was cleared externally, restore it
-                            if (!bot.pathfinder.goal) {
-                                bot.pathfinder.setGoal(new goals.GoalFollow(t, 2), true);
+
+                            if (bot.game?.dimension && p.dimension && bot.game.dimension !== p.dimension) {
+                                clearInterval(check);
+                                bot.pathfinder.setGoal(null);
+                                bot.chat(`[System] ${action.target} moved to ${p.dimension}; come finished in current dimension.`);
+                                resolve();
+                                return;
                             }
-                        }, 1000);
+
+                            const dx = p.x - bot.entity.position.x;
+                            const dz = p.z - bot.entity.position.z;
+                            const dist = Math.hypot(dx, dz);
+                            if (dist > 2.5) {
+                                const af = Math.atan2(dz, dx);
+                                if (!isSafeForward(af) && (hasForwardGap(af) || hasLikelyBridgeNeed(af))) {
+                                    try { await tryBridgeForward(af, action.block || action.material, 2); } catch (_) {}
+                                }
+                            }
+
+                            // If the goal was cleared externally, restore it
+                            if (!bot.pathfinder.goal || !(bot.pathfinder.goal instanceof goals.GoalNear)) {
+                                bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, 3), true);
+                            }
+                        }, 700);
                     });
 
                     // Restore canDig after come action ends
@@ -3007,9 +3683,13 @@ async function processActionQueue() {
                 let destY = action.y;
                 let destZ = action.z;
                 let destDimension = action.dimension || null;
+                let gotoAborted = false;
+                let gotoAbortReason = '';
+                const gotoRetryCount = Number(action._gotoRetryCount || 0);
 
                 if (action.target && typeof action.target === 'string') {
                     const targetName = action.target.toLowerCase();
+                    const normalizedTarget = normalizeStructureTarget(action.target);
 
                     // 1. Check internal waypoints first
                     const internalWP = findWaypoint(action.target);
@@ -3021,29 +3701,17 @@ async function processActionQueue() {
                         bot.chat(`[System] Going to waypoint "${internalWP.name}" at X:${destX}, Y:${destY}, Z:${destZ}${destDimension ? ` (${destDimension})` : ''}`);
 
                     // 2. Check structure names → use /locate
-                    } else if (STRUCTURE_NAMES[targetName]) {
-                        const structureId = STRUCTURE_NAMES[targetName];
+                    } else if (STRUCTURE_NAMES[normalizedTarget] || STRUCTURE_NAMES[targetName]) {
+                        const structureId = STRUCTURE_NAMES[normalizedTarget] || STRUCTURE_NAMES[targetName];
                         bot.chat(`[System] Locating ${action.target}...`);
                         bot.chat(`/locate structure minecraft:${structureId}`);
 
-                        // Wait for the server response chat containing coordinates
-                        const locateResult = await new Promise((resolve) => {
-                            const timeout = setTimeout(() => resolve(null), 10000);
-                            const handler = (username, message) => {
-                                // 1.20.1 format: "The nearest X is at [X: N, Y: ~, Z: N] (N blocks away)"
-                                const m = message.match(/\[X:\s*(-?\d+)[^\]]*Z:\s*(-?\d+)\]/i);
-                                if (m) {
-                                    clearTimeout(timeout);
-                                    bot.removeListener('message', handler);
-                                    resolve({ x: parseInt(m[1], 10), z: parseInt(m[2], 10) });
-                                }
-                            };
-                            bot.on('message', handler);
-                        });
+                        const locateResult = await waitForLocateResult(12000);
 
-                        if (!locateResult) {
+                        if (!locateResult || locateResult.error) {
+                            const details = locateResult?.error ? ` (${locateResult.error.slice(0, 120)})` : '';
                             bot.chat(`[System Error] Could not locate ${action.target}.`);
-                            process.send({ type: 'USER_CHAT', data: { username: "System", message: `Could not locate structure ${action.target}. Try /locate manually.`, environment: getEnvironmentContext() } });
+                            process.send({ type: 'USER_CHAT', data: { username: "System", message: `Could not locate structure ${action.target}${details}. Try alias names like end_city or nether_fortress.`, environment: getEnvironmentContext() } });
                             continue;
                         }
                         destX = locateResult.x;
@@ -3260,6 +3928,8 @@ async function processActionQueue() {
                         ? [..._cachedEntry.waypoints] : null;
                     let _cacheIdx = 0;
                     const _visitedWps = []; // track for saving on success
+                    let _bridgeLock = null; // Keep heading after bridging to avoid repeated micro-reroutes.
+                    let _lastBridgeNoticeAt = 0;
 
                     // Issue 4: Discourage tunneling on long trips
                     const savedCanDig = movements.canDig;
@@ -3276,6 +3946,20 @@ async function processActionQueue() {
                     // Uses the path cache if available, else fresh A* direction.
                     // Returns null when already within 4 blocks of the destination.
                     const _computeNextStreamWp = (cx, cz) => {
+                        // Bridge lock: keep advancing in a fixed direction for a few handoffs
+                        // after a bridge placement so pathfinder doesn't keep detouring to
+                        // tiny nearby islands every 2-3 blocks.
+                        if (_bridgeLock && _bridgeLock.stepsLeft > 0) {
+                            const remLock = Math.sqrt((destX - cx) ** 2 + (destZ - cz) ** 2);
+                            if (remLock <= 4) return null;
+                            _bridgeLock.stepsLeft--;
+                            const stepLen = Math.min(WAYPOINT_STEP, Math.max(12, remLock));
+                            return {
+                                x: cx + stepLen * Math.cos(_bridgeLock.angle),
+                                z: cz + stepLen * Math.sin(_bridgeLock.angle)
+                            };
+                        }
+
                         if (_cacheWps) {
                             const rdx = destX - cx, rdz = destZ - cz;
                             // Advance past cache entries the bot has already passed
@@ -3333,6 +4017,30 @@ async function processActionQueue() {
                             bot.pathfinder.setMovements(movements);
                         }
 
+                        // Proactive bridge extension: when a void gap is directly ahead,
+                        // place bridge blocks immediately instead of waiting for STALL_MS.
+                        // This removes the repeated "wait 4s -> place 2-3 blocks" cadence.
+                        {
+                            const afNow = Math.atan2(rdz, rdx);
+                            if (!isSafeForward(afNow) && (hasForwardGap(afNow) || hasLikelyBridgeNeed(afNow))) {
+                                const bridgeHintNow = action.bridge_block || action.block || action.material;
+                                if (await tryBridgeForward(afNow, bridgeHintNow, 6)) {
+                                    _bridgeLock = { angle: afNow, stepsLeft: 4 };
+                                    if (Date.now() - _lastBridgeNoticeAt > 5000) {
+                                        bot.chat('[System] Void gap detected. Bridged forward. Continuing...');
+                                        _lastBridgeNoticeAt = Date.now();
+                                    }
+                                    _stLastPos = bot.entity.position.clone();
+                                    _stLastTime = Date.now();
+                                    _stuckCount = 0;
+                                    _sw = _computeNextStreamWp(bot.entity.position.x, bot.entity.position.z);
+                                    if (!_sw) break;
+                                    bot.pathfinder.setGoal(new goals.GoalXZ(_sw.x, _sw.z), true);
+                                    continue;
+                                }
+                            }
+                        }
+
                         // Movement progress tracking (time-based instead of per-step)
                         const moved = Math.sqrt((cx - _stLastPos.x) ** 2 + (cz - _stLastPos.z) ** 2);
                         if (moved > 0.5) {
@@ -3346,6 +4054,50 @@ async function processActionQueue() {
                             _stLastTime = Date.now();
                             _stLastPos  = bot.entity.position.clone();
                             _stuckCount++;
+
+                            // Priority: void/gap ahead — bridge immediately regardless of stuck tier.
+                            // This prevents the jump→sidestep→reset cycle that stops bridge recovery
+                            // from ever being reached when stuckCount keeps resetting from sidestep motion.
+                            {
+                                const af0 = Math.atan2(rdz, rdx);
+                                const bridgeHint0 = action.bridge_block || action.block || action.material;
+                                if (!isSafeForward(af0) && (hasForwardGap(af0) || hasLikelyBridgeNeed(af0))) {
+                                    if (await tryBridgeForward(af0, bridgeHint0, 8)) {
+                                        _bridgeLock = { angle: af0, stepsLeft: 4 };
+                                        if (Date.now() - _lastBridgeNoticeAt > 5000) {
+                                            bot.chat('[System] Void gap detected. Bridged forward. Retrying route...');
+                                            _lastBridgeNoticeAt = Date.now();
+                                        }
+                                        _stuckCount = 0;
+                                    } else {
+                                        if (await tryElytraGapCross(af0)) {
+                                            bot.chat('[System] Bridging failed. Crossing gap with Elytra boost.');
+                                            _stLastPos = bot.entity.position.clone();
+                                            _stLastTime = Date.now();
+                                            _stuckCount = 0;
+                                            _sw = _computeNextStreamWp(bot.entity.position.x, bot.entity.position.z);
+                                            if (!_sw) break;
+                                            bot.pathfinder.setGoal(new goals.GoalXZ(_sw.x, _sw.z), true);
+                                            continue;
+                                        }
+                                        if (_lastBridgeFailureReason === 'no_block') {
+                                            bot.chat('[System] Cannot bridge void gap: no solid placeable blocks in inventory.');
+                                        } else {
+                                            bot.chat('[System] Bridge placement failed on this edge. Retrying a new approach...');
+                                        }
+                                        if (_stuckCount >= 7) {
+                                            gotoAborted = true;
+                                            gotoAbortReason = 'bridge attempts exhausted';
+                                            console.log('[Actuator] Bridge attempts exhausted. Aborting goto.');
+                                            break;
+                                        }
+                                    }
+                                    _sw = _computeNextStreamWp(bot.entity.position.x, bot.entity.position.z);
+                                    if (!_sw) break;
+                                    bot.pathfinder.setGoal(new goals.GoalXZ(_sw.x, _sw.z), true);
+                                    continue;
+                                }
+                            }
 
                             if (_stuckCount <= 2) {
                                 // Mild: jump to escape single-block lip catches
@@ -3392,14 +4144,24 @@ async function processActionQueue() {
                                     bot.setControlState('sprint', false);
                                 } else {
                                     const bridgeHint = action.bridge_block || action.block || action.material;
-                                    if (hasForwardGap(af) && await tryBridgeForward(af, bridgeHint, 2)) {
-                                        bot.chat('[System] Gap detected. Bridged forward and retrying route...');
+                                    if ((hasForwardGap(af) || hasLikelyBridgeNeed(af)) && await tryBridgeForward(af, bridgeHint, 6)) {
+                                        _bridgeLock = { angle: af, stepsLeft: 3 };
+                                        if (Date.now() - _lastBridgeNoticeAt > 5000) {
+                                            bot.chat('[System] Gap detected. Bridged forward and retrying route...');
+                                            _lastBridgeNoticeAt = Date.now();
+                                        }
                                     } else {
-                                        bot.chat('[System] Blocked by hazard ahead. Cannot force-walk.');
+                                        if (await tryElytraGapCross(af)) {
+                                            bot.chat('[System] Using Elytra boost to bypass hazardous gap.');
+                                        } else {
+                                            bot.chat('[System] Blocked by hazard ahead. Cannot force-walk.');
+                                        }
                                         console.log('[Actuator] Goto force-walk aborted: hazard ahead.');
                                     }
                                 }
                                 if (_stuckCount >= 7) {
+                                    gotoAborted = true;
+                                    gotoAbortReason = 'stuck recovery exhausted';
                                     console.log('[Actuator] Stuck recovery exhausted (7 attempts). Aborting goto.');
                                     break;
                                 }
@@ -3448,6 +4210,26 @@ async function processActionQueue() {
                         Math.pow(destX - bot.entity.position.x, 2) +
                         Math.pow(destZ - bot.entity.position.z, 2)
                     );
+                    const reachedThreshold = 24;
+
+                    // Do not report success when movement aborted or clearly stopped far away.
+                    if (gotoAborted || finalDist > reachedThreshold) {
+                        const reason = gotoAborted
+                            ? gotoAbortReason
+                            : `insufficient progress (${Math.round(finalDist)} blocks remaining)`;
+
+                        // Auto-retry long-distance goto a few times to recover from transient
+                        // pathfinder stalls / temporary reroutes without requiring new user input.
+                        if (gotoRetryCount < 3 && finalDist > 40) {
+                            bot.chat(`[System] Goto interrupted (${reason}). Retrying... (${gotoRetryCount + 1}/3)`);
+                            actionQueue.unshift({ ...action, _gotoRetryCount: gotoRetryCount + 1 });
+                        } else {
+                            bot.chat(`[System Error] Could not reach destination (${Math.round(finalDist)} blocks remaining). Reason: ${reason}.`);
+                            process.send({ type: 'USER_CHAT', data: { username: "System", message: `Failed to reach destination (${Math.round(finalDist)} blocks remaining). Reason: ${reason}.`, environment: getEnvironmentContext() } });
+                        }
+                        continue;
+                    }
+
                     // Issue 4: status feedback on completion
                     bot.chat(`[System] Reached destination (${Math.round(finalDist)} blocks from target).`);
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `Reached destination (${Math.round(finalDist)} blocks from target).`, environment: getEnvironmentContext() } });
@@ -3756,20 +4538,27 @@ async function processActionQueue() {
             } else if (action.action === 'give') {
                 const targetPlayer = bot.players[action.target]?.entity;
                 const itemTargetName = action.item || action.target;
-                const itemId = bot.registry.itemsByName[itemTargetName]?.id || bot.registry.blocksByName[itemTargetName]?.id;
-                if (targetPlayer && itemId !== undefined) {
-                    bot.chat(`[System] Giving ${action.quantity || 1} ${itemTargetName} to ${action.target}...`);
+                const inventoryItem = resolveInventoryItemForTarget(itemTargetName);
+                if (targetPlayer && inventoryItem) {
+                    const quantity = Math.max(1, parseInt(action.quantity, 10) || 1);
+                    bot.chat(`[System] Giving ${quantity} ${itemTargetName} to ${action.target}...`);
                     await withTimeout(bot.pathfinder.goto(new goals.GoalNear(targetPlayer.position.x, targetPlayer.position.y, targetPlayer.position.z, 2)), timeoutMs, 'goto player for give', () => bot.pathfinder.setGoal(null));
                     await bot.lookAt(targetPlayer.position.offset(0, 1.6, 0));
-                    await bot.toss(itemId, null, action.quantity || 1);
-                    process.send({ type: 'USER_CHAT', data: { username: "System", message: `Successfully gave item to ${action.target}.`, environment: getEnvironmentContext() } });
+                    if (bot.tossStack && quantity >= inventoryItem.count) {
+                        await bot.tossStack(inventoryItem);
+                    } else if (bot.tossStack && quantity === 1) {
+                        await bot.tossStack(inventoryItem);
+                    } else {
+                        await bot.toss(inventoryItem.type, inventoryItem.metadata ?? null, quantity);
+                    }
+                    process.send({ type: 'USER_CHAT', data: { username: "System", message: `Successfully gave ${Math.min(quantity, inventoryItem.count)} ${inventoryItem.name} to ${action.target}.`, environment: getEnvironmentContext() } });
                 } else if (!targetPlayer) {
                     actionQueue = []; // Clear queue on failure
                     bot.chat(`[System Error] I cannot see ${action.target}.`);
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `Cannot see ${action.target}.`, environment: getEnvironmentContext() } });
                 } else {
                     actionQueue = []; // Clear queue on failure
-                    bot.chat(`[System Error] I don't know what item ${itemTargetName} is.`);
+                    bot.chat(`[System Error] I don't have ${itemTargetName} in inventory.`);
                 }
 
             // ── craft ─────────────────────────────────────────────────────────
@@ -3952,7 +4741,7 @@ async function processActionQueue() {
                                 if (n.endsWith('_helmet') || n === 'carved_pumpkin' || n === 'pumpkin'
                                     || n.endsWith('_head') || n.endsWith('_skull')) {
                                     destSlotName = 'head';
-                                } else if (n.endsWith('_chestplate') || n === 'elytra') {
+                                } else if (n.endsWith('_chestplate') || n === 'elytra' || /jetpack/i.test(n)) {
                                     destSlotName = 'torso';
                                 } else if (n.endsWith('_leggings')) {
                                     destSlotName = 'legs';
@@ -5472,6 +6261,55 @@ async function processActionQueue() {
                     process.send({ type: 'USER_CHAT', data: { username: 'System', message: 'blackboard_get: missing key.', environment: getEnvironmentContext() } });
                 }
 
+            // ── fly ───────────────────────────────────────────────────────────
+            // Fly to (x, y, z) using an Elytra or modded Jetpack.
+            // The aviation device is auto-detected from the torso slot; if none is
+            // equipped the bot searches inventory for one and equips it first.
+            // Supported params: x, z (required), y (optional — defaults to +20 above current).
+            } else if (action.action === 'fly') {
+                const destX = action.x !== undefined ? parseFloat(action.x) : bot.entity.position.x;
+                const destZ = action.z !== undefined ? parseFloat(action.z) : bot.entity.position.z;
+                const destY = action.y !== undefined ? parseFloat(action.y) : null;
+
+                // Auto-equip an aviation device if the torso slot has none.
+                const torsoSlotIdx = bot.getEquipmentDestSlot('torso');
+                let torsoItem = bot.inventory.slots[torsoSlotIdx];
+                if (!detectAviationMethod(torsoItem)) {
+                    // Prefer elytra; fall back to any jetpack.
+                    const elytra = bot.inventory.items().find(i => i.name === 'elytra');
+                    const jetpack = !elytra && bot.inventory.items().find(i => detectAviationMethod(i));
+                    const toEquip = elytra || jetpack;
+                    if (toEquip) {
+                        try {
+                            if (torsoItem) await bot.unequip('torso');
+                            await bot.equip(toEquip, 'torso');
+                            torsoItem = bot.inventory.slots[torsoSlotIdx];
+                            bot.chat(`[System] Equipped ${toEquip.name} for flight.`);
+                        } catch (e) {
+                            bot.chat(`[System Error] Could not equip aviation device: ${e.message}`);
+                        }
+                    }
+                }
+
+                const aviation = detectAviationMethod(bot.inventory.slots[torsoSlotIdx]);
+                if (!aviation) {
+                    bot.chat('[System Error] No Elytra or Jetpack available for flight.');
+                    process.send({ type: 'USER_CHAT', data: { username: 'System', message: 'No aviation device found in torso slot or inventory.', environment: getEnvironmentContext() } });
+                } else if (aviation === 'elytra') {
+                    const yTarget = destY !== null ? destY : Math.max(bot.entity.position.y + 30, 128);
+                    await flyWithElytra(destX, yTarget, destZ, currentCancelToken);
+                    if (!currentCancelToken.cancelled) {
+                        process.send({ type: 'USER_CHAT', data: { username: 'System', message: `Elytra flight to X:${Math.round(destX)} Y:${Math.round(yTarget)} Z:${Math.round(destZ)} complete.`, environment: getEnvironmentContext() } });
+                    }
+                } else {
+                    // Jetpack — dynamic config from JETPACK_MOD_REGISTRY.
+                    const yTarget = destY !== null ? destY : bot.entity.position.y + 20;
+                    await flyWithJetpack(destX, yTarget, destZ, aviation.config, currentCancelToken);
+                    if (!currentCancelToken.cancelled) {
+                        process.send({ type: 'USER_CHAT', data: { username: 'System', message: `Jetpack (${aviation.mod}) flight to X:${Math.round(destX)} Y:${Math.round(yTarget)} Z:${Math.round(destZ)} complete.`, environment: getEnvironmentContext() } });
+                    }
+                }
+
             // ── stop ──────────────────────────────────────────────────────────
             } else if (action.action === 'stop') {
                 // Issue 6: explicit stop — halt everything and disable idle combat
@@ -5508,6 +6346,7 @@ async function processActionQueue() {
     // tasks are not re-queued on the next restart.
     _clearQueueCheckpoint();
 
+    currentAction = null;
     isExecuting = false;
 }
 
@@ -5592,6 +6431,49 @@ process.on('message', async (msg) => {
         // Bug Fix 10: Persist the incoming queue so a crash/disconnect can resume it.
         _saveQueueCheckpoint(actionQueue);
         processActionQueue();
+        return;
+    }
+
+    if (msg.type === 'EXTERNAL_ENTITY_UPDATE' && msg.data) {
+        const data = msg.data;
+        if (data.playerName && data.position && Number.isFinite(data.position.x) && Number.isFinite(data.position.y) && Number.isFinite(data.position.z)) {
+            _externalPlayerPositions.set(data.playerName, {
+                x: data.position.x,
+                y: data.position.y,
+                z: data.position.z,
+                dimension: data.dimension || null,
+                updatedAt: Date.now()
+            });
+        }
+        if (Array.isArray(data.players)) {
+            for (const player of data.players) {
+                if (!player || (!player.name && !player.playerName)) continue;
+                if (!Number.isFinite(player.x) || !Number.isFinite(player.y) || !Number.isFinite(player.z)) continue;
+                const name = player.name || player.playerName;
+                _externalPlayerPositions.set(name, {
+                    x: player.x,
+                    y: player.y,
+                    z: player.z,
+                    dimension: data.dimension || null,
+                    updatedAt: Date.now()
+                });
+            }
+        }
+        if (Array.isArray(data.nearbyEntities)) {
+            for (const ent of data.nearbyEntities) {
+                const name = ent?.name;
+                const type = String(ent?.type || '').toLowerCase();
+                if (!name || (!type.includes('player') && !type.includes('minecraft.player'))) continue;
+                if (!Number.isFinite(ent.x) || !Number.isFinite(ent.y) || !Number.isFinite(ent.z)) continue;
+                _externalPlayerPositions.set(name, {
+                    x: ent.x,
+                    y: ent.y,
+                    z: ent.z,
+                    dimension: data.dimension || null,
+                    updatedAt: Date.now()
+                });
+            }
+        }
     }
 });
 

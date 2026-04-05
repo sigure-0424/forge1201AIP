@@ -539,6 +539,108 @@ Do NOT return any action other than chat.`;
         return null;
     }
 
+    normalizeItemName(raw) {
+        const text = String(raw || '').toLowerCase().trim();
+        if (!text) return '';
+        const aliases = [
+            { re: /(滑らかな石|smooth[_\s-]?stone|smoothstone)/i, id: 'smooth_stone' },
+            { re: /(丸石|cobblestone|cobble)/i, id: 'cobblestone' },
+            { re: /(石|stone)/i, id: 'stone' },
+            { re: /(原木|oak[_\s-]?log|log)/i, id: 'oak_log' }
+        ];
+        for (const a of aliases) {
+            if (a.re.test(text)) return a.id;
+        }
+        return text.replace(/[\s-]+/g, '_');
+    }
+
+    extractItemFromUserMessage(userMessage) {
+        const msg = String(userMessage || '');
+        const aliases = [
+            { re: /(滑らかな石|smooth[_\s-]?stone|smoothstone)/i, id: 'smooth_stone' },
+            { re: /(丸石|cobblestone|cobble)/i, id: 'cobblestone' },
+            { re: /(石|stone)/i, id: 'stone' },
+            { re: /(原木|oak[_\s-]?log|log)/i, id: 'oak_log' }
+        ];
+        for (const a of aliases) {
+            if (a.re.test(msg)) return a.id;
+        }
+        return '';
+    }
+
+    extractItemHintFromActions(actions) {
+        if (!Array.isArray(actions)) return '';
+        for (const a of actions) {
+            if (!a || typeof a !== 'object') continue;
+            const cand = a.item || a.target;
+            if (typeof cand === 'string' && cand.trim()) {
+                return this.normalizeItemName(cand);
+            }
+        }
+        return '';
+    }
+
+    buildForcedContainerActions(userMessage, actions) {
+        const msg = String(userMessage || '');
+        const lower = msg.toLowerCase();
+        const hasContainerWord = /(チェスト|chest|container|箱|バレル|barrel|シュルカー|shulker)/i.test(msg);
+        if (!hasContainerWord) return null;
+
+        const hasTake = /(回収|取り出|取って|引き出|withdraw|take|get)/i.test(msg);
+        const hasStore = /(収納|入れて|入れる|格納|deposit|store|put\s+in|into)/i.test(msg);
+        const hasNearby = /(付近|近く|近場|nearby|near)/i.test(msg);
+        const hasFrom = /(から|from)/i.test(msg);
+        const mentionsShulker = /(シュルカー|shulker)/i.test(msg);
+
+        const stackMatch = msg.match(/(\d+)\s*(?:スタック|stack|stacks)/i);
+        const qtyMatch = msg.match(/(\d+)\s*(?:個|items?|blocks?)/i);
+        const quantity = stackMatch
+            ? Math.max(1, parseInt(stackMatch[1], 10)) * 64
+            : (qtyMatch ? Math.max(1, parseInt(qtyMatch[1], 10)) : 0);
+
+        const extractedItem = this.extractItemFromUserMessage(msg);
+        const hintedItem = extractedItem || this.extractItemHintFromActions(actions) || 'smooth_stone';
+        const qty = quantity > 0 ? quantity : 64;
+
+        const existingContainerActions = (Array.isArray(actions) ? actions : []).filter(a =>
+            a && typeof a === 'object' && ['withdraw_from_container', 'deposit_to_container', 'store_in_container', 'transfer_between_containers'].includes(a.action)
+        );
+
+        const needsTransfer = (hasTake && hasStore) || (hasFrom && hasStore) || (mentionsShulker && hasTake && hasStore);
+        if (needsTransfer) {
+            return [{
+                action: 'transfer_between_containers',
+                item: hintedItem,
+                quantity: qty,
+                from: { target: 'chest', distance: hasNearby ? 96 : undefined },
+                to: { target: 'shulker', distance: hasNearby ? 96 : undefined }
+            }];
+        }
+
+        if (hasTake && !hasStore) {
+            return [{
+                action: 'withdraw_from_container',
+                target: mentionsShulker ? 'shulker' : 'chest',
+                item: hintedItem,
+                quantity: qty,
+                distance: hasNearby ? 96 : undefined
+            }];
+        }
+
+        if (hasStore && !hasTake) {
+            return [{
+                action: 'deposit_to_container',
+                target: mentionsShulker ? 'shulker' : 'chest',
+                item: hintedItem,
+                quantity: qty,
+                distance: hasNearby ? 96 : undefined
+            }];
+        }
+
+        if (existingContainerActions.length > 0) return null;
+        return null;
+    }
+
     async processChatWithLLM(botId, data, retryCount = 0, thoughtId) {
         // If a new thought has replaced this one, abort.
         if (this.activeLlmRequests.get(botId) !== thoughtId) {
@@ -642,7 +744,10 @@ Current Environment: ${JSON.stringify(data.environment)}${targetedBlockContext}$
 [{"action": "equip", "target": "diamond_pickaxe"}]
 [{"action": "equip_armor"}]                                                       -- equips best armor in inventory
 [{"action": "find_and_equip"}]                                                    -- finds nearby equipment chests (smooth_stone marker) and takes missing gear (1 per slot/tool)
-[{"action": "withdraw_from_container", "target": "chest", "item": "stone", "quantity": 200, "x": 10, "y": 64, "z": 20}] -- go to the container at the coordinates, open it, and withdraw the item. Use this for regular chests. Do NOT use collect to get items out of chests. If the user refers to "that chest" or "this chest", use the PLAYER IS LOOKING AT coordinates.
+[{"action": "withdraw_from_container", "target": "chest", "item": "stone", "quantity": 200, "x": 10, "y": 64, "z": 20}] -- open chest/barrel/shulker and withdraw items. If x/y/z are omitted, use nearest matching container.
+[{"action": "deposit_to_container", "target": "chest", "item": "stone", "quantity": 200, "x": 10, "y": 64, "z": 20}] -- deposit items from inventory into chest/barrel/shulker. If x/y/z are omitted, use nearest matching container.
+[{"action": "transfer_between_containers", "item": "stone", "quantity": 3000, "from": {"target": "chest", "x": 10, "y": 64, "z": 20}, "to": {"target": "shulker", "x": 30, "y": 64, "z": 40}}] -- shuttle large quantities in multiple trips.
+*CRITICAL*: For requests like "nearby chest" or "近くのチェスト", use withdraw_from_container/deposit_to_container (not find_and_equip).
 [{"action": "craft", "target": "wooden_pickaxe", "quantity": 1}]
 [{"action": "place", "target": "crafting_table"}]
 
@@ -756,6 +861,47 @@ BLAZE (fire resistance): brew(fire_resistance) → navigate_portal(nether) → g
             } else {
                 console.log(`[AgentManager] Failed to get valid JSON from LLM after retries.`);
                 sanitizedActions = [{"action": "chat", "message": "I could not understand that or my brain failed to format the response."}];
+            }
+        }
+
+        // Enforce chest/container workflow intent from user text. This prevents
+        // nearby-chest requests from drifting into unrelated mining/equip actions.
+        const forcedContainerActions = this.buildForcedContainerActions(data?.message, sanitizedActions);
+        if (forcedContainerActions && forcedContainerActions.length > 0) {
+            sanitizedActions = forcedContainerActions;
+        }
+
+        // Resolve "this/that chest" style references to looked-at container coordinates.
+        const lowerMsg = String(data?.message || '').toLowerCase();
+        const hasDeicticContainerRef = /(これ|それ|あれ|このチェスト|そのチェスト|あのチェスト|この箱|その箱|あの箱|this chest|that chest|this box|that box|this one|that one)/i.test(lowerMsg);
+        const botStatusForRef = this.botStatus.get(botId) || {};
+        const tbCandidate = botStatusForRef.targetedBlock || data?.environment?.targetedBlock || null;
+        const tb = tbCandidate ? {
+            x: Number(tbCandidate.x),
+            y: Number(tbCandidate.y),
+            z: Number(tbCandidate.z),
+            type: String(tbCandidate.type || '')
+        } : null;
+        const lookedAtIsContainer = !!tb && /chest|barrel|shulker|チェスト|バレル|シュルカー/i.test(String(tb.type || ''));
+        if (hasDeicticContainerRef && lookedAtIsContainer && Number.isFinite(tb.x) && Number.isFinite(tb.y) && Number.isFinite(tb.z)) {
+            for (const a of sanitizedActions) {
+                if (!a || typeof a !== 'object') continue;
+                if (['withdraw_from_container', 'deposit_to_container', 'store_in_container'].includes(a.action)) {
+                    if (a.x === undefined || a.y === undefined || a.z === undefined) {
+                        a.x = tb.x;
+                        a.y = tb.y;
+                        a.z = tb.z;
+                    }
+                }
+                if (a.action === 'transfer_between_containers') {
+                    a.from = a.from || {};
+                    if (a.from.x === undefined || a.from.y === undefined || a.from.z === undefined) {
+                        a.from.x = tb.x;
+                        a.from.y = tb.y;
+                        a.from.z = tb.z;
+                    }
+                    if (!a.from.target) a.from.target = String(tb.type || 'chest');
+                }
             }
         }
 

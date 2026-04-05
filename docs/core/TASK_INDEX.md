@@ -3,6 +3,7 @@
 ## Active
 
 ## Completed
+- TASK-20260404-002-knowledge-ui-ops: Add WebUI knowledge operations (crawl status + local search), run crawl continuation, and validate with npm test
 - TASK-20260320-002-post-fix-smoke-sync: Run npm test and update STATE.yaml and ACTIVITY_SUMMARY.md for race-condition fix
 - TASK-20260320-001-verify-docker-environment: Verify Docker environment and run npm test suite inside container
 - TASK-20260320-001-documentation-sync: Sync docs for boss-defeat actions, LLM multi-format parser, and GOAL.md key removal

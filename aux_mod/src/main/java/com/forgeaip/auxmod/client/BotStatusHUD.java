@@ -63,14 +63,18 @@ public class BotStatusHUD {
         int x = ForgeAIPConfig.CLIENT.hudX.get();
         int y = ForgeAIPConfig.CLIENT.hudY.get();
 
-        // Determine max line width for background
-        int lineCount = 1 + bots.size(); // header + bot lines
-        int maxWidth = 160; // minimum width
-
         // Header line
         String header = bots.isEmpty()
                 ? "ForgeAIP | no bots"
                 : "ForgeAIP | " + bots.size() + " bot(s)";
+
+        // Determine max line width for background from actual text width
+        int lineCount = 1 + bots.size(); // header + bot lines
+        int maxWidth = Math.max(160, mc.font.width(header) + 8);
+        for (BotStatus bot : bots) {
+            String line = formatBotLine(bot);
+            maxWidth = Math.max(maxWidth, mc.font.width(line));
+        }
 
         // Draw background
         int bgW = maxWidth + PADDING * 2;
@@ -101,8 +105,12 @@ public class BotStatusHUD {
         int px = (int) Math.round(bot.x);
         int py = (int) Math.round(bot.y);
         int pz = (int) Math.round(bot.z);
-        String action = (bot.currentAction != null && !bot.currentAction.isEmpty())
-                ? bot.currentAction : "idle";
+        String action;
+        if (bot.currentAction != null && !bot.currentAction.isEmpty()) {
+            action = bot.currentAction;
+        } else {
+            action = bot.isExecuting ? "working" : "idle";
+        }
         // Trim action to 12 chars to keep line short
         if (action.length() > 12) action = action.substring(0, 11) + ".";
         return String.format("[%s] HP:%.0f FD:%.0f (%d,%d,%d) %s",

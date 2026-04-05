@@ -7,6 +7,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
@@ -138,11 +139,23 @@ public class ClientEvents {
                 targetedBlock.put("type", blockType);
             }
 
+            List<Map<String, Object>> players = new ArrayList<>();
+            for (Player other : mc.level.players()) {
+                if (other == null || other == mc.player || other.isRemoved()) continue;
+                Map<String, Object> p = new HashMap<>();
+                p.put("name", other.getGameProfile().getName());
+                p.put("x", Math.round(other.getX() * 10.0) / 10.0);
+                p.put("y", Math.round(other.getY() * 10.0) / 10.0);
+                p.put("z", Math.round(other.getZ() * 10.0) / 10.0);
+                players.add(p);
+            }
+
             List<Map<String, Object>> entities = new ArrayList<>();
             for (Entity entity : mc.level.entitiesForRendering()) {
                 if (entity == mc.player) continue;
+                if (entity instanceof Player) continue;
                 double dist = entity.distanceTo(mc.player);
-                if (dist > 64) continue;
+                if (dist > 96) continue;
 
                 Map<String, Object> e = new HashMap<>();
                 e.put("type", entity.getType().getDescriptionId());
@@ -178,6 +191,17 @@ public class ClientEvents {
                 sb.append(",\"y\":").append(e.get("y"));
                 sb.append(",\"z\":").append(e.get("z")).append("}");
             }
+            sb.append("]");
+
+            sb.append(",\"players\":[");
+            for (int i = 0; i < players.size(); i++) {
+                Map<String, Object> p = players.get(i);
+                if (i > 0) sb.append(",");
+                sb.append("{\"name\":\"").append(escapeJson((String) p.get("name"))).append("\"");
+                sb.append(",\"x\":").append(p.get("x"));
+                sb.append(",\"y\":").append(p.get("y"));
+                sb.append(",\"z\":").append(p.get("z")).append("}");
+            }
             sb.append("]}");
 
             OrchestratorClient.getInstance().postJson("/api/entity_updates", sb.toString());
@@ -203,6 +227,29 @@ public class ClientEvents {
         if (mc.hitResult == null || mc.hitResult.getType() != HitResult.Type.BLOCK) return;
 
         try {
+            List<Map<String, Object>> players = new ArrayList<>();
+            for (Player other : mc.level.players()) {
+                if (other == null || other == mc.player || other.isRemoved()) continue;
+                Map<String, Object> p = new HashMap<>();
+                p.put("name", other.getGameProfile().getName());
+                p.put("x", Math.round(other.getX() * 10.0) / 10.0);
+                p.put("y", Math.round(other.getY() * 10.0) / 10.0);
+                p.put("z", Math.round(other.getZ() * 10.0) / 10.0);
+                players.add(p);
+            }
+
+            StringBuilder playersJson = new StringBuilder();
+            playersJson.append("[");
+            for (int i = 0; i < players.size(); i++) {
+                Map<String, Object> p = players.get(i);
+                if (i > 0) playersJson.append(",");
+                playersJson.append("{\"name\":\"").append(escapeJson((String) p.get("name"))).append("\"");
+                playersJson.append(",\"x\":").append(p.get("x"));
+                playersJson.append(",\"y\":").append(p.get("y"));
+                playersJson.append(",\"z\":").append(p.get("z")).append("}");
+            }
+            playersJson.append("]");
+
             BlockHitResult blockHit = (BlockHitResult) mc.hitResult;
             net.minecraft.core.BlockPos bPos = blockHit.getBlockPos();
             net.minecraft.world.level.block.state.BlockState state = mc.level.getBlockState(bPos);
@@ -216,11 +263,12 @@ public class ClientEvents {
             String body = String.format(
                 "{\"playerName\":\"%s\",\"position\":{\"x\":%.1f,\"y\":%.1f,\"z\":%.1f}," +
                 "\"dimension\":\"%s\",\"targetedBlock\":{\"x\":%d,\"y\":%d,\"z\":%d,\"type\":\"%s\"}," +
-                "\"nearbyEntities\":[]}",
+                "\"nearbyEntities\":[],\"players\":%s}",
                 escapeJson(playerName), pp.x, pp.y, pp.z,
                 escapeJson(dimension),
                 bPos.getX(), bPos.getY(), bPos.getZ(),
-                escapeJson(blockType));
+                escapeJson(blockType),
+                playersJson);
 
             OrchestratorClient.getInstance().postJson("/api/entity_updates", body);
         } catch (Exception ex) {

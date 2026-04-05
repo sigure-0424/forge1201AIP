@@ -15,6 +15,7 @@
     <span class="server-info" id="server-info">connecting…</span>
     <span id="status-dot" class="offline"></span>
     <span id="header-bot-count">0 bots</span>
+    <button class="header-btn" id="macros-btn">Macros</button>
     <button class="header-btn" id="manage-btn">Manage Bots</button>
     <button class="header-btn" id="settings-btn">⚙ Settings</button>
   </header>
@@ -54,7 +55,54 @@
       </div>
     </section>
 
+    <section id="knowledge-panel">
+      <div class="knowledge-top">
+        <div>
+          <div class="panel-title">Knowledge Search</div>
+          <div id="knowledge-status" class="knowledge-status">Loading crawl status...</div>
+        </div>
+        <button id="knowledge-refresh" class="btn btn-secondary">Refresh</button>
+      </div>
+      <div class="knowledge-query-row">
+        <input id="knowledge-query" type="text" placeholder="Search local wiki corpus (e.g. brass tunnel throughput)">
+        <input id="knowledge-topn" type="number" min="1" max="20" value="8" title="Result count">
+        <button id="knowledge-search-btn" class="btn btn-primary">Search</button>
+      </div>
+      <div id="knowledge-results" class="knowledge-results"></div>
+    </section>
+
   </main>
+</div>
+
+<!-- ── Macro Builder Modal ── -->
+<div class="modal-overlay hidden" id="macro-modal">
+  <div class="modal macro-modal">
+    <h2>Macro Builder</h2>
+    <p class="macro-help">Build actions from form fields and run them without writing raw JSON.</p>
+    <div class="form-row" style="margin-bottom:10px">
+      <div class="form-group" style="flex:1">
+        <label>Macro Name</label>
+        <input id="macro-name" type="text" placeholder="Bridge to End City">
+      </div>
+      <div class="form-group" style="width:220px">
+        <label>Target Bot</label>
+        <select id="macro-bot-select"></select>
+      </div>
+    </div>
+
+    <div id="macro-rows"></div>
+
+    <div class="macro-toolbar">
+      <button class="btn btn-secondary" id="macro-add-row">+ Add Step</button>
+      <button class="btn btn-secondary" id="macro-save">Save Macro</button>
+      <button class="btn btn-secondary" id="macro-load">Load</button>
+    </div>
+
+    <div class="macro-actions">
+      <button class="btn btn-secondary" id="macro-cancel">Close</button>
+      <button class="btn btn-primary" id="macro-run">Run Macro</button>
+    </div>
+  </div>
 </div>
 
 <!-- ── Manage Bots Modal ── -->

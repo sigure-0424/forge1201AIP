@@ -12,6 +12,7 @@ const fs   = require('fs');
 const path = require('path');
 
 const WIKI_DIR = path.join(process.cwd(), 'data', 'wiki');
+const CRAWL_JSONL = path.join(process.cwd(), 'data', 'processed', 'wiki_crawl', 'pages.jsonl');
 
 // ── State ───────────────────────────────────────────────────────────────────
 let _index     = null;  // Map<word, Array<{file,line,text}>>
@@ -26,6 +27,48 @@ function tokenise(text) {
         .filter(t => t.length > 2);
 }
 
+function cleanSearchLine(text) {
+    if (!text) return '';
+    let t = String(text);
+    // Remove markdown images and links while preserving anchor text.
+    t = t.replace(/!\[[^\]]*\]\([^\)]*\)/g, ' ');
+    t = t.replace(/\[([^\]]+)\]\(([^\)]*)\)/g, '$1');
+    // Strip raw URLs and repeated heading markers.
+    t = t.replace(/https?:\/\/\S+/g, ' ');
+    t = t.replace(/[#*_`>|]/g, ' ');
+    t = t.replace(/\s+/g, ' ').trim();
+    return t;
+}
+
+function shouldIndexLine(text) {
+    const t = cleanSearchLine(text);
+    if (!t) return false;
+    if (t.length < 20) return false;
+    if (t.length > 700) return false;
+    if (/^(file|image|category|help):/i.test(t)) return false;
+    if (/cookie|consent|advertis|sponsor|privacy policy/i.test(t)) return false;
+    return true;
+}
+
+function listWikiTextFilesRecursively(dir) {
+    const out = [];
+    if (!fs.existsSync(dir)) return out;
+    const stack = [dir];
+    while (stack.length > 0) {
+        const cur = stack.pop();
+        for (const name of fs.readdirSync(cur)) {
+            const full = path.join(cur, name);
+            const st = fs.statSync(full);
+            if (st.isDirectory()) {
+                stack.push(full);
+                continue;
+            }
+            if (name.endsWith('.md') || name.endsWith('.txt')) out.push(full);
+        }
+    }
+    return out;
+}
+
 // ── Index building ──────────────────────────────────────────────────────────
 
 /**
@@ -37,31 +80,54 @@ function buildIndex() {
         fs.mkdirSync(WIKI_DIR, { recursive: true });
     }
 
-    const files = fs.readdirSync(WIKI_DIR)
-        .filter(f => f.endsWith('.md') || f.endsWith('.txt'))
-        .map(f => path.join(WIKI_DIR, f));
+    const files = listWikiTextFilesRecursively(WIKI_DIR);
+    const hasCrawlJsonl = fs.existsSync(CRAWL_JSONL);
 
-    if (files.length === 0) {
+    if (files.length === 0 && !hasCrawlJsonl) {
         _index = new Map();
         _indexedAt = Date.now();
         return;
     }
 
-    const maxMtime = Math.max(...files.map(f => fs.statSync(f).mtimeMs));
+    const mtimes = files.map(f => fs.statSync(f).mtimeMs);
+    if (hasCrawlJsonl) mtimes.push(fs.statSync(CRAWL_JSONL).mtimeMs);
+    const maxMtime = Math.max(...mtimes);
     if (_index && maxMtime <= _indexedAt) return; // no change
 
     const newIndex = new Map();
 
     for (const filePath of files) {
-        const fileName = path.basename(filePath);
+        const fileName = path.relative(WIKI_DIR, filePath).replace(/\\/g, '/');
         const lines = fs.readFileSync(filePath, 'utf8').split('\n');
         lines.forEach((text, idx) => {
-            const words = tokenise(text);
+            if (!shouldIndexLine(text)) return;
+            const cleaned = cleanSearchLine(text);
+            const words = tokenise(cleaned);
             for (const word of words) {
                 if (!newIndex.has(word)) newIndex.set(word, []);
-                newIndex.get(word).push({ file: fileName, line: idx + 1, text: text.trim() });
+                newIndex.get(word).push({ file: fileName, line: idx + 1, text: cleaned });
             }
         });
+    }
+
+    if (hasCrawlJsonl) {
+        const jsonlLines = fs.readFileSync(CRAWL_JSONL, 'utf8').split('\n').filter(Boolean);
+        for (const raw of jsonlLines) {
+            let obj = null;
+            try { obj = JSON.parse(raw); } catch (_) { obj = null; }
+            if (!obj || !obj.markdown) continue;
+            const source = obj.url || 'crawl4ai';
+            const lines = String(obj.markdown).split('\n');
+            lines.forEach((text, idx) => {
+                if (!shouldIndexLine(text)) return;
+                const cleaned = cleanSearchLine(text);
+                const words = tokenise(cleaned);
+                for (const word of words) {
+                    if (!newIndex.has(word)) newIndex.set(word, []);
+                    newIndex.get(word).push({ file: source, line: idx + 1, text: cleaned });
+                }
+            });
+        }
     }
 
     _index = newIndex;
@@ -83,6 +149,7 @@ function search(query, topN = 5) {
 
     const words = tokenise(query);
     const scores = new Map(); // key → score
+    const queryNorm = cleanSearchLine(query).toLowerCase();
 
     for (const word of words) {
         const hits = _index.get(word) || [];
@@ -93,10 +160,21 @@ function search(query, topN = 5) {
         }
     }
 
-    return [...scores.values()]
-        .sort((a, b) => b.count - a.count)
+    const scored = [...scores.values()].map(({ hit, count }) => {
+        const text = (hit.text || '').toLowerCase();
+        let bonus = 0;
+        if (queryNorm && text.includes(queryNorm)) bonus += 4;
+        const allTerms = words.length > 0 && words.every(w => text.includes(w));
+        if (allTerms) bonus += 2;
+        if (text.length >= 60 && text.length <= 260) bonus += 1;
+        if (text.length > 420) bonus -= 1;
+        return { ...hit, score: count + bonus };
+    });
+
+    return scored
+        .sort((a, b) => b.score - a.score)
         .slice(0, topN)
-        .map(({ hit, count }) => ({ ...hit, score: count }));
+        .map(r => ({ ...r }));
 }
 
 /**

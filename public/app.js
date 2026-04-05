@@ -4,7 +4,14 @@ const state = {
     logs: {},          // botId → [{ username, message, timestamp }]
     selectedBot: null, // currently active bot in chat view
     ws: null,
+    knowledge: {
+        status: null,
+        results: [],
+    },
 };
+
+const MACRO_STORAGE_KEY = 'forgeaip_macros_v1';
+const MACRO_ACTIONS = ['goto', 'come', 'collect', 'give', 'equip', 'craft', 'place', 'eat', 'smelt', 'kill', 'status', 'wait', 'stop', 'chat'];
 
 /* ─── DOM Refs ───────────────────────────────────────────────────────────────── */
 const $ = id => document.getElementById(id);
@@ -17,6 +24,7 @@ const els = {
     serverInfo:   $('server-info'),
     statusDot:    $('status-dot'),
     botCount:     $('header-bot-count'),
+    macrosBtn:    $('macros-btn'),
     invGrid:      $('inventory-grid'),
     armorRows:    $('armor-rows'),
     manageBtn:    $('manage-btn'),
@@ -41,6 +49,22 @@ const els = {
     cfgUrl:        $('cfg-url'),
     cfgModel:      $('cfg-model'),
     cfgKey:        $('cfg-key'),
+    // Macro modal
+    macroModal:    $('macro-modal'),
+    macroName:     $('macro-name'),
+    macroBotSelect:$('macro-bot-select'),
+    macroRows:     $('macro-rows'),
+    macroAddRow:   $('macro-add-row'),
+    macroSave:     $('macro-save'),
+    macroLoad:     $('macro-load'),
+    macroRun:      $('macro-run'),
+    macroCancel:   $('macro-cancel'),
+    knowledgeStatus: $('knowledge-status'),
+    knowledgeRefresh: $('knowledge-refresh'),
+    knowledgeQuery: $('knowledge-query'),
+    knowledgeTopN: $('knowledge-topn'),
+    knowledgeSearchBtn: $('knowledge-search-btn'),
+    knowledgeResults: $('knowledge-results'),
     sentryAccept:  $('sentry-accept'),
     sentryDecline: $('sentry-decline'),
     sentryDontAsk: $('sentry-dont-ask'),
@@ -103,6 +127,10 @@ function connectWS() {
                     updateHeaderCount();
                 }
                 break;
+
+            case 'entity_update':
+                // Reserved for future overlay usage; keep connection handler tolerant.
+                break;
         }
     };
 }
@@ -120,10 +148,25 @@ function appendLog(botId, username, message, timestamp) {
     if (state.logs[botId].length > 300) state.logs[botId].shift();
 }
 
+async function syncSelectedBotLog() {
+    const id = state.selectedBot;
+    if (!id) return;
+    try {
+        const remote = await fetch(`/api/bots/${encodeURIComponent(id)}/log`).then(r => r.json());
+        if (!Array.isArray(remote)) return;
+        const localLen = (state.logs[id] || []).length;
+        if (remote.length > localLen) {
+            state.logs[id] = remote;
+            renderChat();
+        }
+    } catch (_) {}
+}
+
 /* ─── Render helpers ─────────────────────────────────────────────────────────── */
 function renderAll() {
     renderBotList();
     updateBotSelect();
+    updateMacroBotSelect();
     updateHeaderCount();
     if (!state.selectedBot) {
         const first = Object.keys(state.bots)[0];
@@ -377,10 +420,113 @@ async function openSettingsModal() {
 }
 
 async function saveSettings() {
-    const body = { ollamaUrl: els.cfgUrl.value, ollamaModel: els.cfgModel.value };
-    if (els.cfgKey.value) body.ollamaApiKey = els.cfgKey.value;
+    const body = { OLLAMA_URL: els.cfgUrl.value, OLLAMA_MODEL: els.cfgModel.value };
+    if (els.cfgKey.value) body.OLLAMA_API_KEY = els.cfgKey.value;
     await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     els.settingsModal.classList.add('hidden');
+}
+
+/* ─── Macro builder ─────────────────────────────────────────────────────────── */
+function openMacroModal() {
+    updateMacroBotSelect();
+    if (els.macroRows.children.length === 0) addMacroRow();
+    els.macroModal.classList.remove('hidden');
+}
+
+function updateMacroBotSelect() {
+    if (!els.macroBotSelect) return;
+    const cur = els.macroBotSelect.value;
+    els.macroBotSelect.innerHTML = '';
+    for (const id of Object.keys(state.bots)) {
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = id;
+        els.macroBotSelect.appendChild(opt);
+    }
+    if (cur && state.bots[cur]) els.macroBotSelect.value = cur;
+    if (!els.macroBotSelect.value && state.selectedBot) els.macroBotSelect.value = state.selectedBot;
+}
+
+function addMacroRow(data = {}) {
+    const row = document.createElement('div');
+    row.className = 'macro-row';
+    row.innerHTML = `
+      <select class="macro-field macro-action">${MACRO_ACTIONS.map(a => `<option value="${a}">${a}</option>`).join('')}</select>
+      <input class="macro-field" data-key="target" placeholder="target">
+      <input class="macro-field" data-key="x" placeholder="x">
+      <input class="macro-field" data-key="y" placeholder="y">
+      <input class="macro-field" data-key="z" placeholder="z">
+      <input class="macro-field" data-key="item" placeholder="item">
+      <input class="macro-field" data-key="quantity" placeholder="qty">
+      <input class="macro-field" data-key="timeout" placeholder="timeout">
+      <input class="macro-field macro-message" data-key="message" placeholder="message">
+      <button class="btn btn-danger macro-del">✕</button>
+    `;
+    row.querySelector('.macro-action').value = data.action || 'goto';
+    for (const [k, v] of Object.entries(data)) {
+        const field = row.querySelector(`[data-key="${k}"]`);
+        if (field) field.value = v;
+    }
+    row.querySelector('.macro-del').addEventListener('click', () => row.remove());
+    els.macroRows.appendChild(row);
+}
+
+function collectMacroActions() {
+    const rows = [...els.macroRows.querySelectorAll('.macro-row')];
+    const actions = [];
+    for (const row of rows) {
+        const action = row.querySelector('.macro-action').value;
+        const obj = { action };
+        for (const field of row.querySelectorAll('[data-key]')) {
+            const key = field.dataset.key;
+            const raw = field.value.trim();
+            if (!raw) continue;
+            if (['x', 'y', 'z', 'quantity', 'timeout'].includes(key)) {
+                const n = Number(raw);
+                if (!Number.isNaN(n)) obj[key] = n;
+            } else {
+                obj[key] = raw;
+            }
+        }
+        actions.push(obj);
+    }
+    return actions;
+}
+
+function loadSavedMacros() {
+    try { return JSON.parse(localStorage.getItem(MACRO_STORAGE_KEY) || '{}'); }
+    catch (_) { return {}; }
+}
+
+function saveCurrentMacro() {
+    const name = els.macroName.value.trim();
+    if (!name) return;
+    const db = loadSavedMacros();
+    db[name] = collectMacroActions();
+    localStorage.setItem(MACRO_STORAGE_KEY, JSON.stringify(db));
+}
+
+function loadMacroByPrompt() {
+    const db = loadSavedMacros();
+    const names = Object.keys(db);
+    if (names.length === 0) return;
+    const selected = prompt(`Macro name:\n${names.join('\n')}`);
+    if (!selected || !db[selected]) return;
+    els.macroName.value = selected;
+    els.macroRows.innerHTML = '';
+    for (const action of db[selected]) addMacroRow(action);
+}
+
+async function runMacroNow() {
+    const botId = els.macroBotSelect.value || state.selectedBot;
+    const actions = collectMacroActions();
+    if (!botId || actions.length === 0) return;
+    await fetch(`/api/bots/${encodeURIComponent(botId)}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actions, queue_op: 'replace' })
+    });
+    els.macroModal.classList.add('hidden');
 }
 
 /* ─── Sentry consent modal ────────────────────────────────────────────────────── */
@@ -403,6 +549,72 @@ async function saveSentryChoice(opted) {
     els.sentryModal.classList.add('hidden');
 }
 
+/* ─── Knowledge panel ─────────────────────────────────────────────────────── */
+async function refreshKnowledgeStatus() {
+    try {
+        const data = await fetch('/api/knowledge/status').then(r => r.json());
+        if (!data || data.error) throw new Error(data?.error || 'Failed to load status');
+        state.knowledge.status = data;
+        renderKnowledgeStatus();
+    } catch (_) {
+        state.knowledge.status = null;
+        renderKnowledgeStatus();
+    }
+}
+
+function renderKnowledgeStatus() {
+    const s = state.knowledge.status;
+    if (!s) {
+        els.knowledgeStatus.textContent = 'Crawl status unavailable';
+        return;
+    }
+    const pages = Number(s.pages || 0);
+    const frontier = Number(s.frontier || 0);
+    const crawled = s.lastRun?.crawled || '-';
+    const saved = s.lastRun?.saved || '-';
+    els.knowledgeStatus.textContent = `pages: ${pages} | frontier: ${frontier} | last run crawled/saved: ${crawled}/${saved}`;
+}
+
+function renderKnowledgeResults() {
+    const results = state.knowledge.results || [];
+    if (!results.length) {
+        els.knowledgeResults.innerHTML = '<div class="knowledge-empty">No results yet</div>';
+        return;
+    }
+    els.knowledgeResults.innerHTML = results.map(r => {
+        const src = escHtml(String(r.file || 'unknown'));
+        const line = Number(r.line || 0);
+        const score = Number(r.score || 0);
+        return `<div class="knowledge-item">
+          <div class="knowledge-item-meta">${src}:${line} <span>score ${score}</span></div>
+          <div class="knowledge-item-text">${escHtml(String(r.text || ''))}</div>
+        </div>`;
+    }).join('');
+}
+
+async function runKnowledgeSearch() {
+    const query = els.knowledgeQuery.value.trim();
+    if (!query) return;
+    const topN = Math.max(1, Math.min(20, Number(els.knowledgeTopN.value || 8)));
+    els.knowledgeSearchBtn.disabled = true;
+    els.knowledgeSearchBtn.textContent = 'Searching...';
+    try {
+        const data = await fetch('/api/knowledge/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query, topN })
+        }).then(r => r.json());
+        state.knowledge.results = Array.isArray(data?.results) ? data.results : [];
+        renderKnowledgeResults();
+    } catch (_) {
+        state.knowledge.results = [];
+        renderKnowledgeResults();
+    } finally {
+        els.knowledgeSearchBtn.disabled = false;
+        els.knowledgeSearchBtn.textContent = 'Search';
+    }
+}
+
 /* ─── Utilities ──────────────────────────────────────────────────────────────── */
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function escAttr(s) { return String(s).replace(/"/g,'&quot;'); }
@@ -412,6 +624,7 @@ function dimLabel(d) { return { overworld: 'OW', the_nether: 'NE', the_end: 'EN'
 els.sendBtn.addEventListener('click', sendChat);
 els.chatInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
 els.botSelect.addEventListener('change', () => { if (els.botSelect.value) selectBot(els.botSelect.value); });
+els.macrosBtn.addEventListener('click', openMacroModal);
 els.manageBtn.addEventListener('click', openManageModal);
 els.settingsBtn.addEventListener('click', openSettingsModal);
 els.addBotBtn.addEventListener('click', openManageModal);
@@ -420,11 +633,19 @@ els.manageAdd.addEventListener('click', addBot);
 els.bulkSpawnBtn.addEventListener('click', spawnBulkBots);
 els.settingsCancel.addEventListener('click', () => els.settingsModal.classList.add('hidden'));
 els.settingsSave.addEventListener('click', saveSettings);
+els.macroAddRow.addEventListener('click', () => addMacroRow());
+els.macroSave.addEventListener('click', saveCurrentMacro);
+els.macroLoad.addEventListener('click', loadMacroByPrompt);
+els.macroRun.addEventListener('click', runMacroNow);
+els.macroCancel.addEventListener('click', () => els.macroModal.classList.add('hidden'));
 // Sentry consent
 els.sentryAccept.addEventListener('click',  () => saveSentryChoice('yes'));
 els.sentryDecline.addEventListener('click', () => saveSentryChoice('no'));
+els.knowledgeRefresh.addEventListener('click', refreshKnowledgeStatus);
+els.knowledgeSearchBtn.addEventListener('click', runKnowledgeSearch);
+els.knowledgeQuery.addEventListener('keydown', e => { if (e.key === 'Enter') runKnowledgeSearch(); });
 // Close modal on overlay click (not Sentry — user must make an explicit choice)
-[els.manageModal, els.settingsModal].forEach(m => m.addEventListener('click', e => { if (e.target === m) m.classList.add('hidden'); }));
+[els.manageModal, els.settingsModal, els.macroModal].forEach(m => m.addEventListener('click', e => { if (e.target === m) m.classList.add('hidden'); }));
 
 /* ─── Boot ───────────────────────────────────────────────────────────────────── */
 // Load initial state via REST (before WS is ready)
@@ -439,6 +660,13 @@ fetch('/api/bots').then(r => r.json()).then(async bots => {
 }).catch(() => {});
 
 connectWS();
+refreshKnowledgeStatus();
+renderKnowledgeResults();
+
+// Fallback reconciliation: recover chat UI when a websocket message is missed.
+setInterval(() => {
+    if (!document.hidden) syncSelectedBotLog();
+}, 5000);
 
 // Check Sentry consent after initial render (small delay so the page isn't jarring)
 setTimeout(checkSentryConsent, 800);

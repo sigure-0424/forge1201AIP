@@ -111,7 +111,7 @@ public class BotCommand {
         mc.player.displayClientMessage(
                 Component.literal("[ForgeAIP] Starting bot: " + name + "..."), false);
 
-        String body = "{\"botId\":\"" + escape(name) + "\"}";
+        String body = "{\"name\":\"" + escape(name) + "\"}";
         OrchestratorClient.getInstance().postJson("/api/bots", body)
                 .thenAccept(resp -> {
                     String msg = resp != null && resp.contains("\"ok\":true")

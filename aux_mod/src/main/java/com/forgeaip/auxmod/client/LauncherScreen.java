@@ -52,6 +52,7 @@ public class LauncherScreen extends Screen {
     private EditBox fMcHost;
     private EditBox fMcPort;
     private EditBox fBotNames;
+    private EditBox fBotQuickName;
     private EditBox fProjectDir;
     private EditBox fNodePath;
 
@@ -81,6 +82,7 @@ public class LauncherScreen extends Screen {
         fMcPort      = field(FIELD_X + fieldW / 2 + 2, y, fieldW / 2 - 2,
                              String.valueOf(ForgeAIPConfig.CLIENT.launcherMcPort.get())); y += ROW_GAP;
         fBotNames    = field(FIELD_X, y, fieldW, ForgeAIPConfig.CLIENT.launcherBotNames.get()); y += ROW_GAP;
+        fBotQuickName = field(FIELD_X, y, fieldW / 2 - 2, "AI_Bot_01"); y += ROW_GAP;
         fProjectDir  = field(FIELD_X, y, fieldW, ForgeAIPConfig.CLIENT.launcherProjectDir.get()); y += ROW_GAP;
         fNodePath    = field(FIELD_X, y, fieldW / 2 - 2, ForgeAIPConfig.CLIENT.launcherNodePath.get()); y += ROW_GAP + 4;
 
@@ -97,9 +99,13 @@ public class LauncherScreen extends Screen {
                 .pos(btnX + btnSpacing * 2, y).size(btnW, 16).build());
         addRenderableWidget(Button.builder(Component.literal("Close"), btn -> onClose())
                 .pos(btnX + btnSpacing * 3, y).size(btnW, 16).build());
+        addRenderableWidget(Button.builder(Component.literal("+ Bot"), btn -> doQuickAddBot())
+            .pos(FIELD_X + fieldW / 2 + 8, 130).size(56, 16).build());
+        addRenderableWidget(Button.builder(Component.literal("- Bot"), btn -> doQuickRemoveBot())
+            .pos(FIELD_X + fieldW / 2 + 68, 130).size(56, 16).build());
 
         for (EditBox box : new EditBox[]{fOllamaUrl, fOllamaModel, fApiKey, fMcHost, fMcPort,
-                                         fBotNames, fProjectDir, fNodePath}) {
+                         fBotNames, fBotQuickName, fProjectDir, fNodePath}) {
             addRenderableWidget(box);
         }
     }
@@ -159,6 +165,36 @@ public class LauncherScreen extends Screen {
         SystemLauncherManager.getInstance().stop();
     }
 
+    private void doQuickAddBot() {
+        String name = fBotQuickName != null ? fBotQuickName.getValue().trim() : "";
+        if (name.isEmpty()) return;
+        String body = "{\"name\":\"" + escapeJson(name) + "\"}";
+        OrchestratorClient.getInstance().postJson("/api/bots", body)
+                .thenAccept(resp -> sendClientToast((resp != null && resp.contains("\"ok\":true"))
+                        ? "[ForgeAIP] Added bot: " + name
+                        : "[ForgeAIP] Failed to add bot: " + name));
+    }
+
+    private void doQuickRemoveBot() {
+        String name = fBotQuickName != null ? fBotQuickName.getValue().trim() : "";
+        if (name.isEmpty()) return;
+        OrchestratorClient.getInstance().deleteJson("/api/bots/" + name)
+                .thenAccept(resp -> sendClientToast((resp != null && resp.contains("\"ok\":true"))
+                        ? "[ForgeAIP] Removed bot: " + name
+                        : "[ForgeAIP] Failed to remove bot: " + name));
+    }
+
+    private void sendClientToast(String text) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player != null) {
+            mc.execute(() -> mc.player.sendSystemMessage(Component.literal(text)));
+        }
+    }
+
+    private static String escapeJson(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
     // ── Rendering ─────────────────────────────────────────────────────────────
 
     @Override
@@ -190,6 +226,7 @@ public class LauncherScreen extends Screen {
             { "API Key:" },
             { "MC Host / Port:" },
             { "Bot Names:" },
+            { "Quick Bot Name:" },
             { "Project Dir:" },
             { "Node Path:" }
         };
@@ -228,7 +265,7 @@ public class LauncherScreen extends Screen {
     public boolean mouseClicked(double x, double y, int btn) {
         // Unfocus all boxes when clicking outside them
         for (EditBox box : new EditBox[]{fOllamaUrl, fOllamaModel, fApiKey, fMcHost, fMcPort,
-                                         fBotNames, fProjectDir, fNodePath}) {
+                                         fBotNames, fBotQuickName, fProjectDir, fNodePath}) {
             if (box != null) box.setFocused(false);
         }
         return super.mouseClicked(x, y, btn);

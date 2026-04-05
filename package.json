@@ -9,7 +9,9 @@
   "scripts": {
     "start": "node index.js",
     "test": "node tests/test_fml3_handshake_logic_pure.js && node tests/test_dynamic_registry_injector.js && node tests/test_middlewares.js && node tests/test_config_rag_parser.js && node tests/test_agent_manager_recovery.js && node tests/test_e2e_integration.js",
-    "test:e2e": "node tests/test_e2e_integration.js"
+    "test:e2e": "node tests/test_e2e_integration.js",
+    "build:mod-index": "node scripts/build_mod_knowledge_index.js",
+    "crawl:wikis": "node scripts/run_crawl_wikis.js"
   },
   "repository": {
     "type": "git",

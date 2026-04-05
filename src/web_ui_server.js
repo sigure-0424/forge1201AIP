@@ -5,6 +5,7 @@ const http     = require('http');
 const WebSocket = require('ws');
 const path     = require('path');
 const fs       = require('fs');
+const wikiRag  = require('./wiki_rag');
 
 class WebUIServer {
     constructor(agentManager, connectionDefaults = {}, sentryReporter = null) {
@@ -101,6 +102,28 @@ class WebUIServer {
             res.json({ ok: true });
         });
 
+        // POST /api/bots/:id/actions — execute actions directly (bypass LLM)
+        this.app.post('/api/bots/:id/actions', (req, res) => {
+            const { id } = req.params;
+            const proc = m.bots.get(id);
+            if (!proc) return res.status(404).json({ error: 'Bot not found' });
+
+            let { actions, queue_op } = req.body || {};
+            if (!Array.isArray(actions)) actions = [];
+            const sanitized = actions.filter(a => a && typeof a === 'object' && typeof a.action === 'string');
+            if (sanitized.length === 0) {
+                return res.status(400).json({ error: 'actions must contain at least one action object' });
+            }
+            const queueOp = ['replace', 'append', 'ignore'].includes(queue_op) ? queue_op : 'replace';
+
+            try {
+                proc.send({ type: 'EXECUTE_ACTION', action: sanitized, queue_op: queueOp });
+                res.json({ ok: true, count: sanitized.length, queue_op: queueOp });
+            } catch (e) {
+                res.status(500).json({ error: e.message });
+            }
+        });
+
         // GET /api/bots/:id/log — return stored chat history
         this.app.get('/api/bots/:id/log', (req, res) => {
             const { id } = req.params;
@@ -185,6 +208,88 @@ class WebUIServer {
             }
 
             res.json({ ok: true });
+        });
+
+        // GET /api/knowledge/status — crawl corpus and frontier status
+        this.app.get('/api/knowledge/status', (req, res) => {
+            try {
+                const statusPath = path.join(process.cwd(), 'data', 'wiki', 'crawl4ai_status.md');
+                const statePath = path.join(process.cwd(), 'data', 'processed', 'wiki_crawl', 'state.json');
+                const pagesPath = path.join(process.cwd(), 'data', 'processed', 'wiki_crawl', 'pages.jsonl');
+
+                const statusText = fs.existsSync(statusPath)
+                    ? fs.readFileSync(statusPath, 'utf8')
+                    : '';
+
+                let frontier = 0;
+                if (fs.existsSync(statePath)) {
+                    try {
+                        const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+                        if (Array.isArray(state.frontier)) frontier = state.frontier.length;
+                    } catch (_) {}
+                }
+
+                let pages = 0;
+                if (fs.existsSync(pagesPath)) {
+                    const raw = fs.readFileSync(pagesPath, 'utf8');
+                    pages = raw ? raw.split('\n').filter(Boolean).length : 0;
+                }
+
+                const parseMetric = (name) => {
+                    const m = statusText.match(new RegExp(`-\\s+${name}:\\s+([^\\n]+)`));
+                    return m ? m[1].trim() : null;
+                };
+
+                const generatedMatch = statusText.match(/Generated at:\s*([^\n]+)/);
+
+                res.json({
+                    ok: true,
+                    pages,
+                    frontier,
+                    lastGeneratedAt: generatedMatch ? generatedMatch[1].trim() : null,
+                    lastRun: {
+                        crawled: parseMetric('pages_crawled_this_run'),
+                        saved: parseMetric('pages_saved_this_run'),
+                        discoveryRecrawls: parseMetric('discovery_recrawls_this_run'),
+                        remainingFrontier: parseMetric('remaining_frontier'),
+                    },
+                    statusPath: 'data/wiki/crawl4ai_status.md',
+                });
+            } catch (e) {
+                res.status(500).json({ error: e.message });
+            }
+        });
+
+        // POST /api/knowledge/search — local wiki search backed by wiki_rag
+        this.app.post('/api/knowledge/search', (req, res) => {
+            try {
+                const query = String(req.body?.query || '').trim();
+                const topNRaw = Number(req.body?.topN || 8);
+                const topN = Math.max(1, Math.min(20, Number.isFinite(topNRaw) ? topNRaw : 8));
+                if (!query) return res.status(400).json({ error: 'query required' });
+
+                const rawResults = wikiRag.search(query, topN);
+                const results = rawResults.map((r, idx) => {
+                    const file = String(r?.file || 'unknown');
+                    const line = Number.isFinite(Number(r?.line)) ? Number(r.line) : 0;
+                    const text = String(r?.text || '').trim();
+                    const score = Number.isFinite(Number(r?.score)) ? Number(r.score) : 0;
+                    return {
+                        rank: idx + 1,
+                        score,
+                        file,
+                        line,
+                        text,
+                        // Normalized aliases for downstream parsers/LLM prompt builders.
+                        source: { file, line },
+                        snippet: text,
+                    };
+                });
+
+                res.json({ ok: true, query, topN, count: results.length, results });
+            } catch (e) {
+                res.status(500).json({ error: e.message });
+            }
         });
 
         // GET /api/waypoints
@@ -300,6 +405,16 @@ class WebUIServer {
                     }
                 }
 
+                for (const [id, proc] of this.manager.bots.entries()) {
+                    try {
+                        if (proc && proc.connected) {
+                            proc.send({ type: 'EXTERNAL_ENTITY_UPDATE', data: req.body });
+                        }
+                    } catch (e) {
+                        console.warn(`[WebUI] Failed to relay entity update to ${id}: ${e.message}`);
+                    }
+                }
+
                 this._broadcast({
                     type: 'entity_update',
                     data: req.body
@@ -397,12 +512,33 @@ class WebUIServer {
     // ─── Start ────────────────────────────────────────────────────────────────
 
     start(port = 3000) {
-        this.server.listen(port, () => {
-            console.log(`[WebUI] Dashboard available at http://localhost:${port}`);
-        });
-        this.server.on('error', (e) => {
-            console.error(`[WebUI] Server error: ${e.message}`);
-        });
+        let currentPort = port;
+
+        const handleListenError = (err) => {
+            if (err && err.code === 'EADDRINUSE') {
+                const nextPort = currentPort + 1;
+                console.warn(`[WebUI] Port ${currentPort} is in use. Retrying on ${nextPort}...`);
+                currentPort = nextPort;
+                try {
+                    this.server.listen(currentPort);
+                } catch (e) {
+                    handleListenError(e);
+                }
+                return;
+            }
+            console.error(`[WebUI] Server error: ${err?.message || err}`);
+        };
+
+        // Keep the handler persistent so repeated bind conflicts never become uncaught exceptions.
+        this.server.on('error', handleListenError);
+
+        try {
+            this.server.listen(currentPort, () => {
+                console.log(`[WebUI] Dashboard available at http://localhost:${currentPort}`);
+            });
+        } catch (e) {
+            handleListenError(e);
+        }
     }
 }
 

@@ -49,6 +49,78 @@ class LLMClient {
         return JSON.stringify(data);
     }
 
+    // Extract and parse the first valid JSON object/array from a free-form LLM response.
+    // Handles direct JSON, fenced blocks, and mixed prose+JSON outputs.
+    static extractFirstJson(rawText) {
+        const text = String(rawText || '').trim();
+        if (!text) return null;
+
+        // Fast path: response is pure JSON.
+        try {
+            return JSON.parse(text);
+        } catch (_) {}
+
+        // Common pattern: JSON in a fenced code block.
+        const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+        if (fenceMatch && fenceMatch[1]) {
+            try {
+                return JSON.parse(fenceMatch[1].trim());
+            } catch (_) {}
+        }
+
+        // General scan: find the first balanced {...} or [...] and parse candidates.
+        const starts = [];
+        for (let i = 0; i < text.length; i++) {
+            const ch = text[i];
+            if (ch === '{' || ch === '[') starts.push(i);
+        }
+
+        const tryParseBalanced = (startIdx) => {
+            const open = text[startIdx];
+            const close = open === '{' ? '}' : ']';
+            let depth = 0;
+            let inString = false;
+            let escaped = false;
+            for (let i = startIdx; i < text.length; i++) {
+                const ch = text[i];
+                if (inString) {
+                    if (escaped) {
+                        escaped = false;
+                    } else if (ch === '\\') {
+                        escaped = true;
+                    } else if (ch === '"') {
+                        inString = false;
+                    }
+                    continue;
+                }
+                if (ch === '"') {
+                    inString = true;
+                    continue;
+                }
+                if (ch === open) depth++;
+                if (ch === close) {
+                    depth--;
+                    if (depth === 0) {
+                        const candidate = text.slice(startIdx, i + 1).trim();
+                        try {
+                            return JSON.parse(candidate);
+                        } catch (_) {
+                            return null;
+                        }
+                    }
+                }
+            }
+            return null;
+        };
+
+        for (const idx of starts) {
+            const parsed = tryParseBalanced(idx);
+            if (parsed !== null) return parsed;
+        }
+
+        return null;
+    }
+
     async generateAction(prompt) {
         try {
             const headers = { 'Content-Type': 'application/json' };
@@ -105,13 +177,11 @@ class LLMClient {
             const rawText = LLMClient.extractText(data);
             console.log(`\n[LLMClient] --- LLM Response ---\n${rawText}\n[LLMClient] --- END ---\n`);
 
-            // Extract the first JSON object or array from the response text
-            const match = rawText.match(/(\{|\[)[\s\S]*(\}|\])/);
-            if (match) {
-                return JSON.parse(match[0]);
-            } else {
-                throw new Error("Response contains no JSON object or array.");
+            const parsedResponse = LLMClient.extractFirstJson(rawText);
+            if (parsedResponse === null) {
+                throw new Error('Response contains no valid JSON object or array.');
             }
+            return parsedResponse;
 
         } catch (err) {
             console.error("[LLMClient] Failed to generate action:", err.message);

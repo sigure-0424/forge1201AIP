@@ -5,6 +5,7 @@ const sentry        = require('./src/sentry_reporter');
 const path = require('path');
 const readline = require('readline');
 const fs = require('fs');
+const net = require('net');
 
 require('dotenv').config();
 
@@ -64,6 +65,25 @@ async function askSentryConsentCLI() {
     });
 }
 
+async function findAvailablePort(startPort, maxAttempts = 20) {
+    const checkPort = (port) => new Promise((resolve) => {
+        const tester = net.createServer();
+        tester.once('error', () => resolve(false));
+        tester.once('listening', () => {
+            tester.close(() => resolve(true));
+        });
+        tester.listen(port, '::');
+    });
+
+    for (let i = 0; i < maxAttempts; i++) {
+        const port = startPort + i;
+        // eslint-disable-next-line no-await-in-loop
+        const ok = await checkPort(port);
+        if (ok) return port;
+    }
+    return startPort;
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
     // 1. Sentry consent must happen before anything else writes to console
@@ -96,7 +116,11 @@ async function main() {
     }
 
     // 3. WebUI dashboard
-    const webuiPort = parseInt(process.env.WEBUI_PORT || '3000', 10);
+    const requestedWebuiPort = parseInt(process.env.WEBUI_PORT || '3000', 10);
+    const webuiPort = await findAvailablePort(requestedWebuiPort, 50);
+    if (webuiPort !== requestedWebuiPort) {
+        console.warn(`[Main] WEBUI_PORT ${requestedWebuiPort} is in use. Using ${webuiPort} instead.`);
+    }
     const webui = new WebUIServer(manager, { host, port, mode: process.env.MODE || 'full_auto' }, sentry);
     webui.start(webuiPort);
 
