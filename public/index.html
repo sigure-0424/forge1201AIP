@@ -220,5 +220,206 @@
 </div>
 
 <script src="app.js"></script>
+
+<!-- ── VDS-001: Debug Map Overlay ── -->
+<style>
+#debug-map-section {
+  margin: 16px;
+  background: var(--bg2, #1a1a1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  padding: 14px;
+}
+#debug-map-section h3 { margin: 0 0 8px; font-size: 13px; color: var(--text, #eee); }
+#debug-map-canvas { display: block; border: 1px solid var(--border, #444); }
+#debug-map-legend { margin-top: 6px; font-size: 11px; color: var(--text-dim, #888); display: flex; gap: 16px; flex-wrap: wrap; }
+#debug-map-legend span::before { content: '■ '; }
+#debug-map-coords { margin-top: 4px; font-size: 11px; color: var(--text, #ccc); font-family: monospace; }
+#debug-ws-status { font-size: 11px; color: #aaa; float: right; }
+</style>
+
+<div id="debug-map-section">
+  <h3>Debug Map <span id="debug-ws-status">WS: connecting…</span></h3>
+  <canvas id="debug-map-canvas" width="600" height="600"></canvas>
+  <div id="debug-map-legend">
+    <span style="color:#888">Solid block</span>
+    <span style="color:#5599ff">Liquid</span>
+    <span style="color:#ffffff">Air</span>
+    <span style="color:#ff4444">Mismatch</span>
+    <span style="color:#ffee00">Path</span>
+    <span style="color:#44ff44">Bot</span>
+    <span style="color:#ff2222">Stuck</span>
+  </div>
+  <div id="debug-map-coords">pos: —</div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  const CANVAS_PX   = 600;
+  const HALF_BLOCKS = 30;   // 30 blocks each direction → 60×60 window
+  const CELL_PX     = CANVAS_PX / (HALF_BLOCKS * 2); // 10 px/block
+
+  const canvas  = document.getElementById('debug-map-canvas');
+  const ctx     = canvas.getContext('2d');
+  const coordEl = document.getElementById('debug-map-coords');
+  const wsEl    = document.getElementById('debug-ws-status');
+
+  // ── State ────────────────────────────────────────────────────────────────
+  let chunkDump    = {};    // { blockName: [{x,y,z}, ...] }
+  let lastStatus   = null;  // { botId, health, pos:[x,y,z], action, stuckSec }
+  let lastPath     = null;  // { botId, points: [[x,y,z], ...] }
+  let lastMismatch = null;  // { botId, blocks: [[x,y,z,stateId,name], ...] }
+  let lastStuck    = null;  // { botId, pos:[x,y,z], duration_sec }
+  let stuckExpiry  = 0;     // epoch ms when stuck marker expires
+
+  // ── Chunk dump fetch (throttled to once per 5 s) ─────────────────────────
+  let lastDumpFetch = 0;
+  function fetchChunkDump() {
+    const now = Date.now();
+    if (now - lastDumpFetch < 5000) return;
+    lastDumpFetch = now;
+    fetch('/chunk_dump.json')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) chunkDump = data; })
+      .catch(() => {});
+  }
+  fetchChunkDump(); // initial load
+
+  // ── WebSocket connection ──────────────────────────────────────────────────
+  let ws = null;
+  function connectWS() {
+    try {
+      ws = new WebSocket('ws://localhost:3001');
+      ws.onopen = () => { wsEl.textContent = 'WS: connected'; wsEl.style.color = '#44ff44'; };
+      ws.onclose = () => {
+        wsEl.textContent = 'WS: disconnected';
+        wsEl.style.color = '#ff4444';
+        setTimeout(connectWS, 3000);
+      };
+      ws.onerror = () => {};
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          switch (msg.type) {
+            case 'status':
+              lastStatus = msg.data;
+              fetchChunkDump();
+              drawMap();
+              break;
+            case 'path':
+              lastPath = msg.data;
+              drawMap();
+              break;
+            case 'mismatch':
+              lastMismatch = msg.data;
+              drawMap();
+              break;
+            case 'stuck':
+              lastStuck = msg.data;
+              stuckExpiry = Date.now() + 10000;
+              drawMap();
+              break;
+          }
+        } catch (_) {}
+      };
+    } catch (_) {
+      setTimeout(connectWS, 3000);
+    }
+  }
+  connectWS();
+
+  // ── Drawing ───────────────────────────────────────────────────────────────
+  function worldToCanvas(wx, wz, botX, botZ) {
+    const dx = wx - botX;
+    const dz = wz - botZ;
+    const cx = CANVAS_PX / 2 + dx * CELL_PX;
+    const cy = CANVAS_PX / 2 + dz * CELL_PX;
+    return { cx, cy };
+  }
+
+  function drawMap() {
+    ctx.clearRect(0, 0, CANVAS_PX, CANVAS_PX);
+    // Background
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, CANVAS_PX, CANVAS_PX);
+
+    const botX = lastStatus?.pos?.[0] ?? 0;
+    const botY = lastStatus?.pos?.[1] ?? 64;
+    const botZ = lastStatus?.pos?.[2] ?? 0;
+
+    // ── Layer 1: block grid from chunkDump ──────────────────────────────────
+    const liquidNames = new Set(['water', 'lava', 'flowing_water', 'flowing_lava']);
+    for (const [name, positions] of Object.entries(chunkDump)) {
+      if (!Array.isArray(positions)) continue;
+      const isLiquid = liquidNames.has(name);
+      for (const p of positions) {
+        const { cx, cy } = worldToCanvas(p.x, p.z, botX, botZ);
+        if (cx < -CELL_PX || cx > CANVAS_PX + CELL_PX) continue;
+        if (cy < -CELL_PX || cy > CANVAS_PX + CELL_PX) continue;
+        ctx.fillStyle = isLiquid ? 'rgba(50,100,255,0.6)' : 'rgba(140,140,140,0.6)';
+        ctx.fillRect(cx - CELL_PX / 2, cy - CELL_PX / 2, CELL_PX - 1, CELL_PX - 1);
+      }
+    }
+
+    // ── Layer 2: mismatch blocks (red outline) ──────────────────────────────
+    if (lastMismatch?.blocks) {
+      ctx.strokeStyle = 'rgba(255,50,50,0.9)';
+      ctx.lineWidth = 2;
+      for (const b of lastMismatch.blocks) {
+        const { cx, cy } = worldToCanvas(b[0], b[2], botX, botZ);
+        ctx.strokeRect(cx - CELL_PX / 2, cy - CELL_PX / 2, CELL_PX, CELL_PX);
+      }
+    }
+
+    // ── Layer 3: planned path (yellow line) ────────────────────────────────
+    if (lastPath?.points?.length > 1) {
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(255,238,0,0.85)';
+      ctx.lineWidth = 2;
+      const first = lastPath.points[0];
+      const { cx: fx, cy: fy } = worldToCanvas(first[0], first[2], botX, botZ);
+      ctx.moveTo(fx, fy);
+      for (let i = 1; i < lastPath.points.length; i++) {
+        const pt = lastPath.points[i];
+        const { cx, cy } = worldToCanvas(pt[0], pt[2], botX, botZ);
+        ctx.lineTo(cx, cy);
+      }
+      ctx.stroke();
+    }
+
+    // ── Layer 4: bot position (green dot) ──────────────────────────────────
+    if (lastStatus?.pos) {
+      const { cx, cy } = worldToCanvas(botX, botZ, botX, botZ);
+      ctx.beginPath();
+      ctx.fillStyle = '#44ff44';
+      ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // ── Layer 5: stuck marker (red cross, 10 s TTL) ────────────────────────
+    if (lastStuck?.pos && Date.now() < stuckExpiry) {
+      const { cx, cy } = worldToCanvas(lastStuck.pos[0], lastStuck.pos[2], botX, botZ);
+      ctx.strokeStyle = '#ff2222';
+      ctx.lineWidth = 3;
+      const r = 6;
+      ctx.beginPath();
+      ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r);
+      ctx.moveTo(cx + r, cy - r); ctx.lineTo(cx - r, cy + r);
+      ctx.stroke();
+    }
+
+    // ── Coordinates label ──────────────────────────────────────────────────
+    if (lastStatus?.pos) {
+      coordEl.textContent = `pos: ${botX.toFixed(1)}, ${botY.toFixed(1)}, ${botZ.toFixed(1)}  action: ${lastStatus.action || '—'}`;
+    }
+  }
+
+  // Redraw every second so the stuck-marker TTL expires cleanly
+  setInterval(drawMap, 1000);
+  drawMap();
+}());
+</script>
 </body>
 </html>

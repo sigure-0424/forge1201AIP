@@ -80,11 +80,13 @@ public class ClientEvents {
     public static void onKeyInput(InputEvent.Key event) {
         if (HUD_TOGGLE_KEY != null && HUD_TOGGLE_KEY.consumeClick()) {
             BotStatusHUD.toggleVisible();
+            DebugOverlay.toggleOverlay();
             Minecraft mc = Minecraft.getInstance();
             if (mc.player != null) {
                 mc.player.displayClientMessage(
                         net.minecraft.network.chat.Component.literal(
-                                "[ForgeAIP] HUD " + (BotStatusHUD.isVisible() ? "enabled" : "disabled")),
+                                "[ForgeAIP] HUD " + (BotStatusHUD.isVisible() ? "enabled" : "disabled") +
+                                " | Debug Overlay " + (DebugOverlay.isOverlayEnabled() ? "enabled" : "disabled")),
                         true);
             }
         }

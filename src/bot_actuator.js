@@ -14,6 +14,13 @@ const { resolveRequiredMaterials } = require('./material_resolver');
 const { executeMacro } = require('./mod_interaction_executor');
 const wikiRag = require('./wiki_rag');
 
+// ── Visual Debug System instrumentation ─────────────────────────────────────
+const debugTrace = require('./debug_trace_logger');
+const debugWS    = require('./debug_ws_server');
+const obsConnector = require('./obs_connector');
+debugWS.start(3001);
+obsConnector.connect().catch(() => {});
+
 // --- Overwrite Console Logging for External AI Monitor ---
 const originalLog = console.log;
 const originalError = console.error;
@@ -294,6 +301,25 @@ bot.on('spawn', async () => {
     // Keep path planning responsive around gaps/void edges.
     bot.pathfinder.thinkTimeout = 5000;
     bot.pathfinder.tickTimeout = 5;
+
+    // VDS-001: Wrap pathfinder.goto to broadcast path goal to WebUI map overlay.
+    if (!bot.pathfinder._vds_wrapped) {
+        bot.pathfinder._vds_wrapped = true;
+        const _origGoto = bot.pathfinder.goto.bind(bot.pathfinder);
+        bot.pathfinder.goto = function(goal, ...rest) {
+            try {
+                const pos = bot.entity?.position;
+                const gx = goal?.x ?? goal?.centerX;
+                const gy = goal?.y ?? goal?.centerY;
+                const gz = goal?.z ?? goal?.centerZ;
+                const points = [];
+                if (pos) points.push([Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z)]);
+                if (gx != null) points.push([Math.floor(gx), Math.floor(gy ?? 0), Math.floor(gz ?? 0)]);
+                debugWS.broadcast('path', { botId, points });
+            } catch (_) {}
+            return _origGoto(goal, ...rest);
+        };
+    }
 
     // Only register event handlers ONCE to prevent accumulation on respawn
     if (!_spawnInitDone) {
@@ -990,6 +1016,14 @@ bot.on('spawn', async () => {
             fs.writeFile(path.join(process.cwd(), `ai_debug_${botId}.json`), JSON.stringify(debugState, null, 2), () => {});
             fs.appendFile(path.join(process.cwd(), `ai_history_${botId}.log`), JSON.stringify(debugState) + '\n', () => {});
             if (process.send) process.send({ type: 'BOT_STATUS', data: debugState });
+            // VDS-001: broadcast status to WebUI map overlay
+            debugWS.broadcast('status', {
+                botId,
+                health: debugState.health,
+                pos: debugState.position ? [debugState.position.x, debugState.position.y, debugState.position.z] : null,
+                action: debugState.currentAction,
+                stuckSec: _stuckSeconds
+            });
 
             // Issue 3: Continuously track last safe position for accurate death recovery.
             // Only update when on ground and healthy (not during a fall or combat death spiral).
@@ -1003,6 +1037,45 @@ bot.on('spawn', async () => {
         } catch (e) {
             console.error(`[Actuator] Failed to write ai_debug: ${e.message}`);
         }
+    }, 5000);
+
+    // VDS-001: Stuck detection — every 5s compare position against previous sample.
+    let _stuckLastPos = null;
+    let _stuckSeconds = 0;
+    let _obsRecording = false;
+    setInterval(() => {
+        if (!bot.entity) return;
+        const pos = bot.entity.position;
+        if (_stuckLastPos && currentAction && currentAction !== 'stop') {
+            const dx = pos.x - _stuckLastPos.x;
+            const dy = pos.y - _stuckLastPos.y;
+            const dz = pos.z - _stuckLastPos.z;
+            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (dist < 0.5) {
+                _stuckSeconds += 5;
+                debugTrace.logEvent(botId, 'stuck', currentAction, pos, { duration_sec: _stuckSeconds });
+                debugWS.broadcast('stuck', {
+                    botId,
+                    pos: [Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z)],
+                    duration_sec: _stuckSeconds
+                });
+                // OBS: start recording when stuck >= 10 s
+                if (_stuckSeconds >= 10 && obsConnector.isConnected() && !_obsRecording) {
+                    _obsRecording = true;
+                    obsConnector.startRecordIfNotRecording().catch(() => {});
+                }
+            } else {
+                if (_stuckSeconds > 0 && _obsRecording) {
+                    // Bot moved — stop recording after 5 s delay
+                    setTimeout(() => {
+                        _obsRecording = false;
+                        obsConnector.stopRecord().catch(() => {});
+                    }, 5000);
+                }
+                _stuckSeconds = 0;
+            }
+        }
+        _stuckLastPos = pos.clone();
     }, 5000);
 
     // Run water/ground escape asynchronously so it doesn't block IPC actions.
@@ -1309,6 +1382,21 @@ bot.on('chat', (username, message) => {
     const isAsync = message.startsWith('-!');
     const cleanMessage = isAsync ? message.slice(2).trim() : message.slice(1).trim();
     process.send({ type: 'USER_CHAT', data: { username, message: cleanMessage, async: isAsync, environment: getEnvironmentContext() } });
+});
+
+// VDS-001: !mismatch chat command — detect and broadcast block registry mismatches.
+bot.on('chat', (username, message) => {
+    if (message.trim() !== '!mismatch') return;
+    const { detectMismatches } = require('./debug_mismatch_detector');
+    detectMismatches(bot).then((mismatches) => {
+        debugWS.broadcast('mismatch', {
+            botId,
+            blocks: mismatches.map(m => [m.x, m.y, m.z, m.botStateId, m.realName])
+        });
+        bot.chat(`[System] Mismatch scan: ${mismatches.length} block(s) differ. Broadcasted to WebUI.`);
+    }).catch((err) => {
+        bot.chat(`[System] Mismatch scan failed: ${err.message}`);
+    });
 });
 
 // ─── Internal Waypoint System ──────────────────────────────────────────────────
@@ -3105,6 +3193,8 @@ async function processActionQueue() {
             if (!action || !action.action) continue;
             currentAction = action.action;
             if (currentCancelToken.cancelled) break;
+            // VDS-001: trace action start
+            debugTrace.logEvent(botId, 'start', action.action, bot.entity?.position);
 
             // Guard: if the server connection is dead, don't try to send packets.
             // This prevents ECONNRESET errors when the server disconnected during LLM processing.
@@ -6515,7 +6605,12 @@ async function processActionQueue() {
 
             } // end action dispatch
 
+            // VDS-001: trace action complete
+            debugTrace.logEvent(botId, 'complete', action.action, bot.entity?.position);
+
         } catch (err) {
+            // VDS-001: trace action fail
+            debugTrace.logEvent(botId, 'fail', action ? action.action : 'unknown', bot.entity?.position, { reason: err.message });
             console.error(`[Actuator] Action execution failed: ${err.message}`);
             if (bot._client.chat) bot.chat("[System Error] An error occurred.");
             bot.pathfinder.setGoal(null);

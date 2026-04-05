@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "categories": {
+    "pathfinding": [
+      {
+        "id": "path_flat",
+        "desc": "平坦道路の直線移動",
+        "script": null,
+        "tags": ["pathfinder", "movement"]
+      },
+      {
+        "id": "path_step_1up",
+        "desc": "1段差の登り",
+        "script": null,
+        "tags": ["pathfinder", "movement"]
+      },
+      {
+        "id": "path_step_1down",
+        "desc": "1段差の降り",
+        "script": null,
+        "tags": ["pathfinder", "movement"]
+      },
+      {
+        "id": "path_liquid_avoid",
+        "desc": "液体ブロック隣接回避",
+        "script": null,
+        "tags": ["pathfinder", "liquid"]
+      },
+      {
+        "id": "path_special_block",
+        "desc": "特殊ブロック上の歩行（MOD追加ブロック）",
+        "script": null,
+        "tags": ["pathfinder", "mod_blocks"]
+      }
+    ],
+    "block_interaction": [
+      {
+        "id": "place_basic",
+        "desc": "通常ブロックの設置",
+        "script": null,
+        "tags": ["block", "place"]
+      },
+      {
+        "id": "place_liquid_adjacent",
+        "desc": "液体隣接位置へのブロック設置",
+        "script": null,
+        "tags": ["block", "place", "liquid"]
+      },
+      {
+        "id": "destroy_basic",
+        "desc": "通常ブロックの破壊",
+        "script": null,
+        "tags": ["block", "destroy"]
+      },
+      {
+        "id": "destroy_special",
+        "desc": "特殊ブロックの破壊（MOD追加）",
+        "script": null,
+        "tags": ["block", "destroy", "mod_blocks"]
+      }
+    ],
+    "item_use": [
+      {
+        "id": "item_special_use",
+        "desc": "特殊な使い方のアイテム使用",
+        "script": null,
+        "tags": ["item"]
+      }
+    ],
+    "create_mod": [
+      {
+        "id": "create_contraption_avoid",
+        "desc": "Createコントラプション回避",
+        "script": null,
+        "tags": ["create_mod", "pathfinder"]
+      }
+    ],
+    "protocol": [
+      {
+        "id": "fml3_handshake_pure",
+        "desc": "FML3 ハンドシェイクロジック（純粋単体テスト）",
+        "script": "tests/test_fml3_handshake_logic_pure.js",
+        "tags": ["protocol", "fml3"]
+      },
+      {
+        "id": "fml3_handshake_integration",
+        "desc": "FML3 ハンドシェイクロジック（統合テスト）",
+        "script": "tests/test_fml3_handshake_logic.js",
+        "tags": ["protocol", "fml3", "integration"]
+      }
+    ],
+    "registry": [
+      {
+        "id": "dynamic_registry_injector",
+        "desc": "動的ブロックレジストリ注入",
+        "script": "tests/test_dynamic_registry_injector.js",
+        "tags": ["registry", "mod_blocks"]
+      }
+    ],
+    "middleware": [
+      {
+        "id": "middlewares",
+        "desc": "イベントデバウンサー・NBTパッチ・Createコントラプション障害物検出",
+        "script": "tests/test_middlewares.js",
+        "tags": ["middleware", "create_mod"]
+      }
+    ],
+    "config": [
+      {
+        "id": "config_rag_parser",
+        "desc": "設定ファイルRAGパーサー",
+        "script": "tests/test_config_rag_parser.js",
+        "tags": ["config", "rag"]
+      }
+    ],
+    "agent": [
+      {
+        "id": "agent_manager_recovery",
+        "desc": "エージェントマネージャーのリカバリーパイプライン",
+        "script": "tests/test_agent_manager_recovery.js",
+        "tags": ["agent", "recovery"]
+      }
+    ],
+    "e2e": [
+      {
+        "id": "e2e_integration",
+        "desc": "エンドツーエンド統合テスト",
+        "script": "tests/test_e2e_integration.js",
+        "tags": ["e2e", "integration"]
+      }
+    ]
+  }
+}

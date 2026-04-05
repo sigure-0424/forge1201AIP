@@ -11,7 +11,8 @@
     "test": "node tests/test_fml3_handshake_logic_pure.js && node tests/test_dynamic_registry_injector.js && node tests/test_middlewares.js && node tests/test_config_rag_parser.js && node tests/test_agent_manager_recovery.js && node tests/test_e2e_integration.js",
     "test:e2e": "node tests/test_e2e_integration.js",
     "build:mod-index": "node scripts/build_mod_knowledge_index.js",
-    "crawl:wikis": "node scripts/run_crawl_wikis.js"
+    "crawl:wikis": "node scripts/run_crawl_wikis.js",
+    "test:runner": "node tests/run_tests.js"
   },
   "repository": {
     "type": "git",
@@ -37,7 +38,8 @@
     "smol-toml": "^1.6.1",
     "socket.io": "^4.8.3",
     "vec3": "^0.1.10",
-    "ws": "^8.20.0"
+    "ws": "^8.20.0",
+    "obs-websocket-js": "^5.0.6"
   },
   "devDependencies": {
     "minecraft-protocol": "^1.64.0"

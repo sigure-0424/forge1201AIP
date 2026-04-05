@@ -43,6 +43,9 @@ public class AuxMod {
         SafeZoneManager.getInstance().load();
         MacroManager.getInstance().load();
 
+        // VDS-001: start debug WebSocket overlay client
+        com.forgeaip.auxmod.client.DebugOverlay.init();
+
         LOGGER.info("[ForgeAIP] Client setup complete.");
     }
 }
