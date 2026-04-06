@@ -2153,3 +2153,5 @@
 {"ts":1775490715754,"botId":"AI_Bot_01","event":"stuck","action":"give","pos":[-391,65,-541],"extra":{"duration_sec":55}}
 {"ts":1775490720754,"botId":"AI_Bot_01","event":"stuck","action":"give","pos":[-391,65,-541],"extra":{"duration_sec":60}}
 {"ts":1775490725753,"botId":"AI_Bot_01","event":"stuck","action":"give","pos":[-391,65,-541],"extra":{"duration_sec":65}}
+{"ts":1775490730753,"botId":"AI_Bot_01","event":"stuck","action":"give","pos":[-391,65,-541],"extra":{"duration_sec":70}}
+{"ts":1775490735761,"botId":"AI_Bot_01","event":"stuck","action":"give","pos":[-391,65,-541],"extra":{"duration_sec":75}}
