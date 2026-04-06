@@ -7,11 +7,7 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.minecraft.client.Minecraft;
 import net.minecraft.commands.CommandSourceStack;
-import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
-import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.phys.BlockHitResult;
-import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.RegisterClientCommandsEvent;
@@ -142,25 +138,16 @@ public class BotCommand {
         mc.player.displayClientMessage(
                 Component.literal("[ForgeAIP] Sending to " + name + ": " + message), false);
 
-        // Capture crosshair target at command time so orchestrator has a fresh targetedBlock.
-        if (mc.level != null && mc.hitResult != null && mc.hitResult.getType() == HitResult.Type.BLOCK) {
+        // Send the sender's current location snapshot without any view-dependent data.
+        if (mc.level != null) {
             try {
-                BlockHitResult blockHit = (BlockHitResult) mc.hitResult;
-                BlockPos bPos = blockHit.getBlockPos();
-                BlockState state = mc.level.getBlockState(bPos);
-                String blockType = net.minecraftforge.registries.ForgeRegistries.BLOCKS
-                        .getKey(state.getBlock()).toString();
                 Vec3 pp = mc.player.position();
                 String playerName = mc.player.getName().getString();
                 String dimension  = mc.level.dimension().location().toString();
                 String snapshot = String.format(
-                    "{\"playerName\":\"%s\",\"position\":{\"x\":%.1f,\"y\":%.1f,\"z\":%.1f}," +
-                    "\"dimension\":\"%s\",\"targetedBlock\":{\"x\":%d,\"y\":%d,\"z\":%d,\"type\":\"%s\"}," +
-                    "\"nearbyEntities\":[]}",
+                    "{\"playerName\":\"%s\",\"position\":{\"x\":%.1f,\"y\":%.1f,\"z\":%.1f},\"dimension\":\"%s\"}",
                     escape(playerName), pp.x, pp.y, pp.z,
-                    escape(dimension),
-                    bPos.getX(), bPos.getY(), bPos.getZ(),
-                    escape(blockType));
+                    escape(dimension));
                 OrchestratorClient.getInstance().postJson("/api/entity_updates", snapshot);
             } catch (Exception ex) {
                 AuxMod.LOGGER.debug("[ForgeAIP] cmdChat snapshot error: {}", ex.getMessage());

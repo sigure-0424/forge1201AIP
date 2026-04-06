@@ -747,6 +747,8 @@ Current Environment: ${JSON.stringify(data.environment)}${targetedBlockContext}$
 ━━━ BASIC ACTIONS ━━━
 [{"action": "chat", "message": "text"}]
 [{"action": "come", "target": "player_name"}]                                    -- follows continuously until stopped
+[{"action": "fly", "x": 10, "z": 20}]                                         -- use Elytra/Jetpack flight (auto-equip torso aviation)
+[{"action": "fly", "x": 10, "y": 120, "z": 20}]                             -- precise altitude flight via Elytra/Jetpack
 [{"action": "stop"}]                                                              -- halts ALL actions; bot stands completely still (no combat)
 [{"action": "wait"}]                                                              -- idle combat: bot eliminates nearby threats until next instruction
 [{"action": "goto", "x": 10, "z": 20, "timeout": 60}]                           -- any distance, auto-waypoints
@@ -761,6 +763,7 @@ Current Environment: ${JSON.stringify(data.environment)}${targetedBlockContext}$
 [{"action": "deposit_to_container", "target": "chest", "item": "stone", "quantity": 200, "x": 10, "y": 64, "z": 20}] -- deposit items from inventory into chest/barrel/shulker. If x/y/z are omitted, use nearest matching container.
 [{"action": "transfer_between_containers", "item": "stone", "quantity": 3000, "from": {"target": "chest", "x": 10, "y": 64, "z": 20}, "to": {"target": "shulker", "x": 30, "y": 64, "z": 40}}] -- shuttle large quantities in multiple trips.
 *CRITICAL*: For requests like "nearby chest" or "近くのチェスト", use withdraw_from_container/deposit_to_container (not find_and_equip).
+*CRITICAL*: If the user says "jetpack", "elytra", "飛んで", or "飛行", prefer action "fly" instead of "goto".
 [{"action": "craft", "target": "wooden_pickaxe", "quantity": 1}]
 [{"action": "place", "target": "crafting_table"}]
 
@@ -963,6 +966,57 @@ Storage MOD remote access:     send_custom_payload (channel from wiki)
                         a.from.z = tb.z;
                     }
                     if (!a.from.target) a.from.target = String(tb.type || 'chest');
+                }
+            }
+        }
+
+        // Normalize common self-references for come/give so "follow me" does not end up
+        // targeting a literal placeholder like "player_name".
+        const issuerName = String(data?.username || '').trim();
+        const userMsg = String(data?.message || '');
+        const lowerUserMsg = userMsg.toLowerCase();
+        const selfRefInMessage = /(follow me|come to me|to me|私に|わたしに|俺に|ぼくに|僕に|ついてきて|ついて来て|追従|追いかけて|こっちに来て)/i.test(userMsg);
+        for (const a of sanitizedActions) {
+            if (!a || typeof a !== 'object') continue;
+            if (a.action === 'come') {
+                const targetRaw = String(a.target || '').trim();
+                if (!targetRaw || /^player_name$/i.test(targetRaw) || /^(me|myself|user|username)$/i.test(targetRaw) || selfRefInMessage) {
+                    if (issuerName && issuerName !== 'TaskSystem' && issuerName.toLowerCase() !== 'system') {
+                        a.target = issuerName;
+                    }
+                }
+            }
+            if (a.action === 'give') {
+                const targetRaw = String(a.target || '').trim();
+                if (!targetRaw || /^player_name$/i.test(targetRaw) || /^(me|myself|user|username)$/i.test(targetRaw)) {
+                    if (issuerName && issuerName !== 'TaskSystem' && issuerName.toLowerCase() !== 'system') {
+                        a.target = issuerName;
+                    }
+                }
+            }
+        }
+
+        // If user explicitly asks for jetpack/elytra flight, promote goto to fly.
+        const wantsFlight = /(jetpack|elytra|ジェットパック|エリトラ|飛んで|飛行|飛べ)/i.test(userMsg);
+        if (wantsFlight) {
+            for (const a of sanitizedActions) {
+                if (!a || typeof a !== 'object') continue;
+                if (a.action === 'goto') {
+                    a.action = 'fly';
+                    if (a.timeout === undefined) a.timeout = 120;
+                }
+            }
+            const hasFlightAction = sanitizedActions.some(a => a && a.action === 'fly');
+            if (!hasFlightAction) {
+                const nums = lowerUserMsg.match(/-?\d+(?:\.\d+)?/g) || [];
+                if (nums.length >= 2) {
+                    sanitizedActions = [{
+                        action: 'fly',
+                        x: Number(nums[0]),
+                        z: Number(nums[1]),
+                        ...(nums.length >= 3 ? { y: Number(nums[2]) } : {}),
+                        timeout: 120
+                    }];
                 }
             }
         }

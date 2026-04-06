@@ -2664,8 +2664,10 @@ const MATERIAL_TAG_GROUPS = {
     cobblestone: ['cobblestone', 'stone'],
 };
 
-// FIX: ensureToolFor now also proactively crafts a speed-improving tool (axe for logs)
-// even when harvestTools is null, preventing the 30s-per-log timeout without an axe.
+// If a block strictly requires a harvest tool, ensureToolFor may obtain/craft one.
+// For optional speed tools (for example axes for logs), we prefer to continue
+// bare-handed rather than trigger long auto-craft/pathing sequences that can
+// disconnect the bot on unstable terrain or busy Forge servers.
 async function ensureToolFor(block) {
     // Skip fluids, air, and any block the registry marks as non-diggable.
     // Calling this for water/lava would fall through to the default 'pickaxe'
@@ -2715,6 +2717,11 @@ async function ensureToolFor(block) {
                 await equipBestTool(block); return;
             }
         }
+    }
+
+    if (!hasRequirement) {
+        console.log(`[Actuator] No ${toolCat} found for ${block.name}. Continuing without optional tool.`);
+        return;
     }
 
     console.log(`[Actuator] No ${toolCat} found for ${block.name}. Auto-crafting tool...`);
@@ -3709,6 +3716,9 @@ async function processActionQueue() {
                     // Also monitor the goal — if something external clears it (e.g. the
                     // pathfinder's own stop(), or a bug), re-set it so following continues.
                     await new Promise(resolve => {
+                        let lastKnown = tracked ? { ...tracked } : null;
+                        let lastSeenAt = tracked ? Date.now() : 0;
+                        let missingSince = 0;
                         const check = setInterval(async () => {
                             if (currentCancelToken.cancelled) {
                                 clearInterval(check);
@@ -3720,6 +3730,15 @@ async function processActionQueue() {
                             const t = bot.players[action.target]?.entity;
                             let p = getTrackedPlayerSnapshot(action.target);
                             if (t && t.isValid) {
+                                lastKnown = {
+                                    x: t.position.x,
+                                    y: t.position.y,
+                                    z: t.position.z,
+                                    dimension: bot.game?.dimension || null,
+                                    updatedAt: Date.now()
+                                };
+                                lastSeenAt = Date.now();
+                                missingSince = 0;
                                 const dxNow = t.position.x - bot.entity.position.x;
                                 const dzNow = t.position.z - bot.entity.position.z;
                                 const distNow = Math.hypot(dxNow, dzNow);
@@ -3742,7 +3761,21 @@ async function processActionQueue() {
                                 }
                                 p = null;
                             }
+                            if (p) {
+                                lastKnown = p;
+                                lastSeenAt = Date.now();
+                                missingSince = 0;
+                            }
+
+                            if (!p && lastKnown && Date.now() - lastSeenAt <= 30000) {
+                                p = lastKnown;
+                            }
+
                             if (!p) {
+                                if (!missingSince) missingSince = Date.now();
+                                if (Date.now() - missingSince < 15000) {
+                                    return;
+                                }
                                 clearInterval(check);
                                 bot.pathfinder.setGoal(null);
                                 bot.chat(`[System Error] Lost sight of ${action.target}.`);
@@ -5992,6 +6025,30 @@ async function processActionQueue() {
 
                 if (tpTargetName) {
                     if (DEBUG) {
+                        // Check player Y before teleporting — if they're on high terrain
+                        // (mountain, cliff), TP would strand the bot far from test targets.
+                        // Only TP when player is at navigable ground level (Y < 90).
+                        const tpPlayerEnt = bot.players[tpTargetName]?.entity;
+                        const playerOnHighTerrain = tpPlayerEnt && tpPlayerEnt.position.y > 90;
+                        if (playerOnHighTerrain) {
+                            console.log(`[find_land] DEBUG: Player at high terrain (Y=${Math.round(tpPlayerEnt.position.y)}) — skipping TP, navigating toward flat land instead.`);
+                            // Bot may also be on high terrain from previous test. If so, pathfind
+                            // toward world origin (0,0) which is typically at lower elevation.
+                            if (bot.entity.position.y > 90) {
+                                console.log(`[find_land] DEBUG: Bot also at high terrain (Y=${Math.round(bot.entity.position.y)}) — navigating toward (0,0) flat zone for up to 60s...`);
+                                bot.chat(`/effect give ${bot.username} minecraft:resistance 600 10 true`);
+                                await new Promise(r => setTimeout(r, 600));
+                                try {
+                                    await withTimeout(
+                                        bot.pathfinder.goto(new goals.GoalXZ(0, 0)),
+                                        60000, 'find_land descent to flat zone', () => bot.pathfinder.setGoal(null)
+                                    );
+                                } catch (e) {
+                                    console.log(`[find_land] DEBUG: Descent navigation ended (${e.message}) — continuing from Y=${Math.round(bot.entity.position.y)}`);
+                                }
+                            }
+                            tpTargetName = null; // use no-player path for effects/items
+                        } else {
                         // Apply resistance BEFORE TP so the bot can't die if player is
                         // in a dangerous area (underground, lava, etc.)
                         console.log(`[find_land] DEBUG: Applying resistance before TP...`);
@@ -6004,6 +6061,7 @@ async function processActionQueue() {
                         console.log(`[find_land] DEBUG: Teleporting to player: ${tpTargetName}`);
                         bot.chat(`/tp ${bot.username} ${tpTargetName}`);
                         await new Promise(r => setTimeout(r, 3000));
+                        } // end else (player not on high terrain)
                     } else {
                         console.log(`[find_land] Pathfinding to player: ${tpTargetName}`);
                         const targetPlayer = bot.players[tpTargetName];
@@ -6045,30 +6103,41 @@ async function processActionQueue() {
                 // /spreadplayers to land on dry ground before setting up the test area.
                 // This runs for both the player-TP path and the no-player path.
                 if (DEBUG) {
-                    const posCheck = bot.entity.position;
-                    const blockCheck = bot.blockAt(posCheck);
-                    const isInWater = blockCheck?.name?.includes('water') || !bot.entity.onGround;
-                    // Also detect phantom modded-block collision:
-                    // a modded block looks like air to the client but is solid on the server.
-                    // Symptom: blockAtFeet = air, but onGround = true; bot can't move.
-                    // We trigger a short movement attempt (reset to detect high correction count).
-                    _serverPosCount = 0;
-                    // Set a temporary goal 5 blocks ahead; if we get >10 corrections in 2s
-                    // the server is fighting our position = phantom block.
-                    // NOTE: goto() returns a promise that rejects when goal is cancelled;
-                    // attach .catch() to prevent unhandled rejection → uncaughtException.
-                    const testGoalPos = posCheck.offset(5, 0, 0);
-                    bot.pathfinder.goto(new goals.GoalXZ(testGoalPos.x, testGoalPos.z)).catch(() => {});
-                    await new Promise(r => setTimeout(r, 2000));
-                    bot.pathfinder.setGoal(null);
-                    const isPhantomBlock = _serverPosCount > 15;
-                    if (isPhantomBlock) console.log(`[find_land] Phantom block detected (${_serverPosCount} corrections) — spreadplayers.`);
-                    if (isInWater || isPhantomBlock) {
-                        console.log(`[find_land] In water/air or stuck — using /spreadplayers for safe land...`);
+                    let recoveredToDryLand = false;
+                    for (let attempt = 1; attempt <= 3; attempt++) {
+                        const posCheck = bot.entity.position;
+                        const blockAtFeet = bot.blockAt(posCheck);
+                        const blockBelowFeet = bot.blockAt(posCheck.offset(0, -1, 0));
+                        const isInWater = blockAtFeet?.name?.includes('water') || blockBelowFeet?.name?.includes('water') || !bot.entity.onGround;
+
+                        // Detect phantom modded-block collision on each attempt. This catches
+                        // "air but stuck" states where the server keeps correcting position.
+                        _serverPosCount = 0;
+                        const testGoalPos = posCheck.offset(5, 0, 0);
+                        bot.pathfinder.goto(new goals.GoalXZ(testGoalPos.x, testGoalPos.z)).catch(() => {});
+                        await new Promise(r => setTimeout(r, 2000));
+                        bot.pathfinder.setGoal(null);
+                        const isPhantomBlock = _serverPosCount > 15;
+
+                        if (!isInWater && !isPhantomBlock) {
+                            recoveredToDryLand = true;
+                            break;
+                        }
+
+                        if (isPhantomBlock) {
+                            console.log(`[find_land] Phantom block detected (${_serverPosCount} corrections) — spreadplayers attempt ${attempt}/3.`);
+                        } else {
+                            console.log(`[find_land] In water/air or unstable ground — spreadplayers attempt ${attempt}/3...`);
+                        }
+
                         bot.chat(`/spreadplayers 0 0 5 500 false ${bot.username}`);
-                        await new Promise(r => setTimeout(r, 5000));
+                        await new Promise(r => setTimeout(r, 5500));
                         try { await bot.waitForChunksToLoad(); } catch (e) {}
-                        await new Promise(r => setTimeout(r, 1000));
+                        await new Promise(r => setTimeout(r, 1200));
+                    }
+
+                    if (!recoveredToDryLand) {
+                        console.log('[find_land] WARNING: still not on dry stable ground after 3 spreadplayers attempts. Continuing with fallback setup.');
                     }
                 }
 
@@ -6078,7 +6147,7 @@ async function processActionQueue() {
                 const safeSend = async (cmd) => {
                     if (bot._client?.socket?.writable !== true) return false;
                     bot.chat(cmd);
-                    await new Promise(r => setTimeout(r, 600));
+                    await new Promise(r => setTimeout(r, 900));
                     return bot._client?.socket?.writable === true;
                 };
 
@@ -6327,13 +6396,24 @@ async function processActionQueue() {
                             spawnGroundY = Math.floor(sp.y) + dy; break;
                         }
                     }
-                    const spawnLogY = spawnGroundY + 1;
-                    console.log(`[find_land] Summoning animals at (${spawnX},${spawnLogY},${spawnZ})`);
+                    console.log(`[find_land] Summoning animals near (${spawnX},${spawnGroundY + 1},${spawnZ})`);
                     for (const { dx, dz, mob } of animalSpawns) {
                         if (!landOk) break;
-                        // Ensure solid ground under the spawn point (handles cliff edges)
-                        landOk = await safeSend(`/setblock ${spawnX + dx} ${spawnGroundY} ${spawnZ + dz} minecraft:stone`);
-                        if (landOk) landOk = await safeSend(`/summon minecraft:${mob} ${spawnX + dx} ${spawnLogY} ${spawnZ + dz}`);
+                        const ax = spawnX + dx, az = spawnZ + dz;
+                        // Independently find the actual ground Y at this spawn offset.
+                        // In all-ocean worlds even a 2-block offset can be sea surface.
+                        let actualGroundY = spawnGroundY;
+                        for (let ay = spawnGroundY + 3; ay >= spawnGroundY - 30; ay--) {
+                            const b2 = bot.blockAt(new Vec3(ax, ay, az));
+                            if (b2 && b2.boundingBox === 'block' && !b2.name.includes('water')) {
+                                actualGroundY = ay; break;
+                            }
+                        }
+                        // Fill a 2-high solid platform at this offset so animals don't fall
+                        // into sea even if the edge is a cliff or open water.
+                        landOk = await safeSend(`/fill ${ax - 1} ${actualGroundY} ${az - 1} ${ax + 1} ${actualGroundY} ${az + 1} minecraft:stone`);
+                        if (landOk) landOk = await safeSend(`/fill ${ax - 1} ${actualGroundY + 1} ${az - 1} ${ax + 1} ${actualGroundY + 2} ${az + 1} minecraft:air replace`);
+                        if (landOk) landOk = await safeSend(`/summon minecraft:${mob} ${ax} ${actualGroundY + 1} ${az}`);
                         await new Promise(r => setTimeout(r, 200)); // space out summons to avoid spam kick
                     }
                 }

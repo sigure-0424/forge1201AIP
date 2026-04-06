@@ -1,37 +1,24 @@
 {
-  "timestamp": "2026-04-05T07:17:59.053Z",
+  "timestamp": "2026-04-06T15:52:05.750Z",
   "ready": true,
   "position": {
-    "x": -384.5,
-    "y": 66,
-    "z": -532.5
+    "x": -390.3,
+    "y": 65,
+    "z": -540.5
   },
   "health": 20,
   "food": 20,
   "dimension": "overworld",
   "isExecuting": true,
-  "currentAction": "chat",
+  "currentAction": "give",
   "actionQueue": [],
   "treeDir": null,
-  "inventory": [
-    {
-      "name": "unknown",
-      "count": 1
-    },
-    {
-      "name": "iron_ingot",
-      "count": 1
-    },
-    {
-      "name": "create:creative_crate",
-      "count": 1
-    }
-  ],
+  "inventory": [],
   "armor": {
     "head": null,
     "torso": null,
     "legs": null,
     "feet": null,
-    "hand": "unknown"
+    "hand": null
   }
 }

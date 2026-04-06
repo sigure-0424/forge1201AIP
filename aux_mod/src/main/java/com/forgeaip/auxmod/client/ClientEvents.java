@@ -6,23 +6,13 @@ import com.forgeaip.auxmod.network.OrchestratorClient;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
-import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.phys.BlockHitResult;
-import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.*;
 import net.minecraftforge.event.TickEvent;
-import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import org.lwjgl.glfw.GLFW;
-
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 
 /**
  * Client-side event handlers: keybind registration, tick-based entity tracking,
@@ -126,87 +116,16 @@ public class ClientEvents {
             String dimension = mc.level.dimension().location().toString();
             String playerName = mc.player.getName().getString();
 
-            // Get targeted block
-            HitResult hitResult = mc.player.pick(20.0D, 1.0F, false);
-            Map<String, Object> targetedBlock = null;
-            if (hitResult.getType() == HitResult.Type.BLOCK) {
-                BlockHitResult blockHit = (BlockHitResult) hitResult;
-                net.minecraft.core.BlockPos bPos = blockHit.getBlockPos();
-                net.minecraft.world.level.block.state.BlockState state = mc.level.getBlockState(bPos);
-                String blockType = net.minecraftforge.registries.ForgeRegistries.BLOCKS.getKey(state.getBlock()).toString();
-                targetedBlock = new HashMap<>();
-                targetedBlock.put("x", bPos.getX());
-                targetedBlock.put("y", bPos.getY());
-                targetedBlock.put("z", bPos.getZ());
-                targetedBlock.put("type", blockType);
-            }
+            String body = String.format(
+                "{\"playerName\":\"%s\",\"position\":{\"x\":%.1f,\"y\":%.1f,\"z\":%.1f},\"dimension\":\"%s\"}",
+                escapeJson(playerName),
+                playerPos.x,
+                playerPos.y,
+                playerPos.z,
+                escapeJson(dimension)
+            );
 
-            List<Map<String, Object>> players = new ArrayList<>();
-            for (Player other : mc.level.players()) {
-                if (other == null || other == mc.player || other.isRemoved()) continue;
-                Map<String, Object> p = new HashMap<>();
-                p.put("name", other.getGameProfile().getName());
-                p.put("x", Math.round(other.getX() * 10.0) / 10.0);
-                p.put("y", Math.round(other.getY() * 10.0) / 10.0);
-                p.put("z", Math.round(other.getZ() * 10.0) / 10.0);
-                players.add(p);
-            }
-
-            List<Map<String, Object>> entities = new ArrayList<>();
-            for (Entity entity : mc.level.entitiesForRendering()) {
-                if (entity == mc.player) continue;
-                if (entity instanceof Player) continue;
-                double dist = entity.distanceTo(mc.player);
-                if (dist > 96) continue;
-
-                Map<String, Object> e = new HashMap<>();
-                e.put("type", entity.getType().getDescriptionId());
-                e.put("name", entity.getName().getString());
-                e.put("x", Math.round(entity.getX() * 10.0) / 10.0);
-                e.put("y", Math.round(entity.getY() * 10.0) / 10.0);
-                e.put("z", Math.round(entity.getZ() * 10.0) / 10.0);
-                entities.add(e);
-            }
-
-            // Build JSON manually (no Gson dependency)
-            StringBuilder sb = new StringBuilder();
-            sb.append("{\"playerName\":\"").append(escapeJson(playerName)).append("\"");
-            sb.append(",\"position\":{\"x\":").append(Math.round(playerPos.x * 10.0) / 10.0)
-              .append(",\"y\":").append(Math.round(playerPos.y * 10.0) / 10.0)
-              .append(",\"z\":").append(Math.round(playerPos.z * 10.0) / 10.0).append("}");
-            sb.append(",\"dimension\":\"").append(escapeJson(dimension)).append("\"");
-
-            if (targetedBlock != null) {
-                sb.append(",\"targetedBlock\":{\"x\":").append(targetedBlock.get("x"))
-                  .append(",\"y\":").append(targetedBlock.get("y"))
-                  .append(",\"z\":").append(targetedBlock.get("z"))
-                  .append(",\"type\":\"").append(escapeJson((String) targetedBlock.get("type"))).append("\"}");
-            }
-
-            sb.append(",\"nearbyEntities\":[");
-            for (int i = 0; i < entities.size(); i++) {
-                Map<String, Object> e = entities.get(i);
-                if (i > 0) sb.append(",");
-                sb.append("{\"type\":\"").append(escapeJson((String) e.get("type"))).append("\"");
-                sb.append(",\"name\":\"").append(escapeJson((String) e.get("name"))).append("\"");
-                sb.append(",\"x\":").append(e.get("x"));
-                sb.append(",\"y\":").append(e.get("y"));
-                sb.append(",\"z\":").append(e.get("z")).append("}");
-            }
-            sb.append("]");
-
-            sb.append(",\"players\":[");
-            for (int i = 0; i < players.size(); i++) {
-                Map<String, Object> p = players.get(i);
-                if (i > 0) sb.append(",");
-                sb.append("{\"name\":\"").append(escapeJson((String) p.get("name"))).append("\"");
-                sb.append(",\"x\":").append(p.get("x"));
-                sb.append(",\"y\":").append(p.get("y"));
-                sb.append(",\"z\":").append(p.get("z")).append("}");
-            }
-            sb.append("]}");
-
-            OrchestratorClient.getInstance().postJson("/api/entity_updates", sb.toString());
+            OrchestratorClient.getInstance().postJson("/api/entity_updates", body);
         } catch (Exception ex) {
             AuxMod.LOGGER.debug("[ForgeAIP] Entity tracking error: {}", ex.getMessage());
         }
@@ -226,51 +145,16 @@ public class ClientEvents {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) return;
         if (!OrchestratorClient.getInstance().isConnected()) return;
-        if (mc.hitResult == null || mc.hitResult.getType() != HitResult.Type.BLOCK) return;
 
         try {
-            List<Map<String, Object>> players = new ArrayList<>();
-            for (Player other : mc.level.players()) {
-                if (other == null || other == mc.player || other.isRemoved()) continue;
-                Map<String, Object> p = new HashMap<>();
-                p.put("name", other.getGameProfile().getName());
-                p.put("x", Math.round(other.getX() * 10.0) / 10.0);
-                p.put("y", Math.round(other.getY() * 10.0) / 10.0);
-                p.put("z", Math.round(other.getZ() * 10.0) / 10.0);
-                players.add(p);
-            }
-
-            StringBuilder playersJson = new StringBuilder();
-            playersJson.append("[");
-            for (int i = 0; i < players.size(); i++) {
-                Map<String, Object> p = players.get(i);
-                if (i > 0) playersJson.append(",");
-                playersJson.append("{\"name\":\"").append(escapeJson((String) p.get("name"))).append("\"");
-                playersJson.append(",\"x\":").append(p.get("x"));
-                playersJson.append(",\"y\":").append(p.get("y"));
-                playersJson.append(",\"z\":").append(p.get("z")).append("}");
-            }
-            playersJson.append("]");
-
-            BlockHitResult blockHit = (BlockHitResult) mc.hitResult;
-            net.minecraft.core.BlockPos bPos = blockHit.getBlockPos();
-            net.minecraft.world.level.block.state.BlockState state = mc.level.getBlockState(bPos);
-            String blockType = net.minecraftforge.registries.ForgeRegistries.BLOCKS
-                    .getKey(state.getBlock()).toString();
-
             Vec3 pp = mc.player.position();
             String playerName = mc.player.getName().getString();
             String dimension  = mc.level.dimension().location().toString();
 
             String body = String.format(
-                "{\"playerName\":\"%s\",\"position\":{\"x\":%.1f,\"y\":%.1f,\"z\":%.1f}," +
-                "\"dimension\":\"%s\",\"targetedBlock\":{\"x\":%d,\"y\":%d,\"z\":%d,\"type\":\"%s\"}," +
-                "\"nearbyEntities\":[],\"players\":%s}",
+                "{\"playerName\":\"%s\",\"position\":{\"x\":%.1f,\"y\":%.1f,\"z\":%.1f},\"dimension\":\"%s\"}",
                 escapeJson(playerName), pp.x, pp.y, pp.z,
-                escapeJson(dimension),
-                bPos.getX(), bPos.getY(), bPos.getZ(),
-                escapeJson(blockType),
-                playersJson);
+                escapeJson(dimension));
 
             OrchestratorClient.getInstance().postJson("/api/entity_updates", body);
         } catch (Exception ex) {

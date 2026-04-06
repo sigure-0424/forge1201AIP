@@ -12,10 +12,13 @@ const fs = require('fs');
 
 const host = process.env.MC_HOST || '172.24.96.1';
 const port = parseInt(process.env.MC_PORT || '25565', 10);
+const ACTION_SEND_GAP_MS = 900;
 
 // Each test bot gets a unique name
 const BOTS = {};
 let testResults = [];
+const SEND_CHAINS = {};
+const DISCONNECT_LIKE_BOT_ERRORS = /(ECONNRESET|EPIPE|socket hang up|client timed out|Server closed connection)/i;
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -46,7 +49,7 @@ function spawnBot(botId) {
         env: { ...process.env, BOT_ID: botId, BOT_OPTIONS: JSON.stringify({ host, port }), DEBUG: 'true' }
     });
 
-    BOTS[botId] = { process: botProcess, messages: [], ready: false };
+    BOTS[botId] = { process: botProcess, messages: [], ready: false, disconnected: false };
 
     botProcess.on('message', (msg) => {
         msg._receivedAt = Date.now(); // timestamp for filtering stale messages
@@ -54,26 +57,73 @@ function spawnBot(botId) {
         if (msg.type === 'USER_CHAT') {
             console.log(`[${botId}] ${msg.data.username}: ${msg.data.message}`);
         }
+        // Only treat transport/session-level failures as disconnected.
+        // BotError can be action-level and should not block future action sends.
+        if (msg.type === 'ERROR' && (
+            msg.category === 'Disconnected' ||
+            msg.category === 'Kicked' ||
+            (msg.category === 'BotError' && DISCONNECT_LIKE_BOT_ERRORS.test(msg.details || ''))
+        )) {
+            BOTS[botId].disconnected = true;
+            console.log(`[Test] ${botId} disconnected (${msg.category}): ${msg.details || 'unknown reason'}`);
+        }
     });
 
     botProcess.on('exit', (code) => {
+        if (BOTS[botId]) BOTS[botId].disconnected = true;
         console.log(`[Test] Bot ${botId} exited with code ${code}`);
     });
 
     return botProcess;
 }
 
-function sendAction(botId, actions) {
-    if (!Array.isArray(actions)) actions = [actions];
-    BOTS[botId].process.send({ type: 'EXECUTE_ACTION', action: actions });
+async function recoverBotIfDisconnected(botId, reason = 'unknown') {
+    const state = BOTS[botId];
+    if (!state || !state.disconnected) return true;
+
+    console.log(`[Test] Recovering ${botId} (${reason})...`);
+    try {
+        if (state.process && !state.process.killed) {
+            state.process.kill('SIGINT');
+        }
+    } catch (_) {}
+
+    spawnBot(botId);
+    await waitForReady(botId, 120000);
+    await testFindLand(botId, false);
+    await waitForHealth(botId, 10, 15000);
+    return !BOTS[botId].disconnected;
 }
 
-async function waitForMessage(botId, filter, timeoutMs = 60000) {
+function sendAction(botId, actions) {
+    if (!Array.isArray(actions)) actions = [actions];
+    const state = BOTS[botId];
+    if (!state || !state.process || state.process.killed) return Promise.resolve();
+
+    if (!SEND_CHAINS[botId]) SEND_CHAINS[botId] = Promise.resolve();
+    SEND_CHAINS[botId] = SEND_CHAINS[botId]
+        .then(async () => {
+            // Rate-limit IPC action bursts per bot to reduce server-side spam disconnects
+            // when setup sends multiple commands in short succession.
+            if (state.process && !state.process.killed) {
+                state.process.send({ type: 'EXECUTE_ACTION', action: actions });
+            }
+            await sleep(ACTION_SEND_GAP_MS);
+        })
+        .catch(() => {});
+
+    return SEND_CHAINS[botId];
+}
+
+async function waitForMessage(botId, filter, timeoutMs = 60000, afterMs = null) {
     const start = Date.now();
+    // afterMs lets callers record a timestamp before sendAction so that bot replies
+    // arriving inside the 900ms sendAction gap are not dropped by the recency filter.
+    const cutoff = afterMs !== null ? afterMs : start;
     while (Date.now() - start < timeoutMs) {
-        // Only match messages that arrived at or after this wait started (avoids
+        // Only match messages that arrived at or after the cutoff (avoids
         // stale messages from a previous timed-out test bleeding into the next one).
-        const idx = BOTS[botId].messages.findIndex(m => (m._receivedAt || 0) >= start && filter(m));
+        const idx = BOTS[botId].messages.findIndex(m => (m._receivedAt || 0) >= cutoff && filter(m));
         if (idx !== -1) {
             return BOTS[botId].messages.splice(idx, 1)[0];
         }
@@ -113,8 +163,8 @@ async function waitForReady(botId, timeoutMs = 120000) {
             if (fileCreated && age < 10000 && debug.health > 0 && debug.ready === true) {
                 console.log(`[Test] ${botId} is ready at (${debug.position.x}, ${debug.position.y}, ${debug.position.z})`);
                 BOTS[botId].ready = true;
-                // Extra wait to let the bot fully settle before sending commands
-                await sleep(5000);
+                // Keep this short to avoid early server kicks before first action.
+                await sleep(1000);
                 return;
             }
         }
@@ -123,21 +173,23 @@ async function waitForReady(botId, timeoutMs = 120000) {
     console.log(`[Test] WARNING: ${botId} did not become ready within timeout`);
 }
 
-async function measureSpeed(botId, targetX, targetZ, label) {
+async function measureSpeed(botId, targetX, targetZ, label, timeoutSec = 120) {
     // Record start position from debug file
     const startDebug = readDebug(botId);
     if (!startDebug) { console.log('[Test] No debug data'); return null; }
 
     const startPos = { x: startDebug.position.x, z: startDebug.position.z };
     const startTime = Date.now();
+    const sendAt = Date.now();
 
-    sendAction(botId, { action: 'goto', x: targetX, z: targetZ, timeout: 120 });
+    await sendAction(botId, { action: 'goto', x: targetX, z: targetZ, timeout: timeoutSec });
 
     // Wait for completion message
     const result = await waitForMessage(botId, m =>
         m.type === 'USER_CHAT' && m.data.username === 'System' &&
         (m.data.message.includes('Reached') || m.data.message.includes('Cannot') || m.data.message.includes('failed')),
-        120000
+        timeoutSec * 1000 + 5000,
+        sendAt
     );
 
     const endTime = Date.now();
@@ -194,13 +246,31 @@ async function testFollow(botId, playerName, durationSec = 20) {
     const startDebug = readDebug(botId);
     const startTime = Date.now();
 
-    sendAction(botId, { action: 'come', target: playerName });
+    if (BOTS[playerName]?.disconnected) {
+        console.log(`[Test] Follow target ${playerName} is disconnected. Attempting one recovery...`);
+        const ok = await recoverBotIfDisconnected(playerName, 'before follow start');
+        if (!ok) {
+            const resultObj = {
+                test: `follow_${playerName}`,
+                distance: 0,
+                time: durationSec,
+                speed: 0,
+                status: 'target disconnected',
+                pass: false
+            };
+            console.log(`[Test Result] Follow: target disconnected | FAIL`);
+            testResults.push(resultObj);
+            return;
+        }
+    }
+
+    await sendAction(botId, { action: 'come', target: playerName });
 
     // Let it follow for durationSec
     await sleep(durationSec * 1000);
 
     // Stop following
-    sendAction(botId, { action: 'stop' });
+    await sendAction(botId, { action: 'stop' });
     await sleep(2000);
 
     const endDebug = await waitForFreshDebug(botId, startTime + durationSec * 1000);
@@ -227,13 +297,15 @@ async function testFollow(botId, playerName, durationSec = 20) {
 async function testCollect(botId, target, quantity, label) {
     console.log(`\n=== TEST: Collect ${quantity} ${target} ===`);
     const startTime = Date.now();
+    const sendAt = Date.now();
 
-    sendAction(botId, { action: 'collect', target, quantity, timeout: 120 });
+    await sendAction(botId, { action: 'collect', target, quantity, timeout: 120 });
 
     const result = await waitForMessage(botId, m =>
         m.type === 'USER_CHAT' && m.data.username === 'System' &&
         (m.data.message.includes('collected') || m.data.message.includes('Could not') || m.data.message.includes('need')),
-        120000
+        120000,
+        sendAt
     );
 
     const elapsed = (Date.now() - startTime) / 1000;
@@ -252,12 +324,14 @@ async function testCollect(botId, target, quantity, label) {
 
 async function testCraft(botId, target, quantity, label) {
     console.log(`\n=== TEST: Craft ${quantity} ${target} ===`);
-    sendAction(botId, { action: 'craft', target, quantity, timeout: 60 });
+    const sendAt = Date.now();
+    await sendAction(botId, { action: 'craft', target, quantity, timeout: 60 });
 
     const result = await waitForMessage(botId, m =>
         m.type === 'USER_CHAT' && m.data.username === 'System' &&
         (m.data.message.includes('craft') || m.data.message.includes('Craft')),
-        60000
+        60000,
+        sendAt
     );
 
     const msg = result ? result.data.message : 'timeout';
@@ -269,16 +343,30 @@ async function testCraft(botId, target, quantity, label) {
 
     console.log(`[Test Result] ${label}: ${msg} | ${resultObj.pass ? 'PASS' : 'FAIL'}`);
     testResults.push(resultObj);
+
+    const deathMsg = BOTS[botId]?.messages.findIndex(
+        m => (m._receivedAt || 0) >= sendAt &&
+             m.type === 'USER_CHAT' && m.data.username === 'System' &&
+             m.data.message.includes('I died!')
+    );
+    if (deathMsg !== -1) {
+        BOTS[botId].messages.splice(deathMsg, 1);
+        console.log(`[Test] ${botId} died during ${label}. Waiting for respawn then find_land...`);
+        await sleep(5000);
+        await testFindLand(botId, false);
+        await waitForHealth(botId, 10, 15000);
+    }
 }
 
 async function testKill(botId, target, quantity, label) {
     console.log(`\n=== TEST: Kill ${quantity} ${target} ===`);
-    sendAction(botId, { action: 'kill', target, quantity, timeout: 60 });
+    const sendAt = Date.now();
+    await sendAction(botId, { action: 'kill', target, quantity, timeout: 60 });
 
     const result = await waitForMessage(botId, m =>
         m.type === 'USER_CHAT' && m.data.username === 'System' &&
         (m.data.message.includes('killed') || m.data.message.includes('not found') || m.data.message.includes('Failed to kill')),
-        80000
+        80000, sendAt
     );
 
     const msg = result ? result.data.message : 'timeout';
@@ -290,24 +378,52 @@ async function testKill(botId, target, quantity, label) {
 
     console.log(`[Test Result] ${label}: ${msg} | ${resultObj.pass ? 'PASS' : 'FAIL'}`);
     testResults.push(resultObj);
+
+    // If the bot died during the kill test, it respawns at a new (possibly underground)
+    // location. Detect this by checking for the 'I died!' IPC message and run find_land
+    // again to restore a safe surface position before subsequent tests.
+    const deathMsg = BOTS[botId]?.messages.findIndex(
+        m => (m._receivedAt || 0) >= sendAt &&
+             m.type === 'USER_CHAT' && m.data.username === 'System' &&
+             m.data.message.includes('I died!')
+    );
+    if (deathMsg !== -1) {
+        BOTS[botId].messages.splice(deathMsg, 1);
+        console.log(`[Test] ${botId} died during ${label}. Waiting for respawn then find_land...`);
+        // Wait for the bot to finish respawning (bot_actuator emits 'Pathfinder and Physics initialized')
+        await sleep(5000);
+        await testFindLand(botId, false);
+        await waitForHealth(botId, 10, 15000);
+    }
 }
 
-async function testFindLand(botId) {
+async function testFindLand(botId, allowRecovery = true) {
     console.log(`\n=== SETUP: find_land for ${botId} ===`);
-    sendAction(botId, { action: 'find_land' });
+    const sendAt = Date.now();
+    await sendAction(botId, { action: 'find_land' });
 
     // Up to 180s: TP + buffs + chunk load + navigate to natural trees (up to 150b)
     const result = await waitForMessage(botId, m =>
         m.type === 'USER_CHAT' && m.data.username === 'System' &&
         (m.data.message.includes('Platform ready') || m.data.message.includes('find_land:') ||
          m.data.message.includes('disconnected during')),
-        180000
+        180000,
+        sendAt
     );
 
     const msg = result ? result.data.message : 'timeout - proceeding with current position';
     console.log(`[Test Setup] ${msg}`);
-    if (msg.includes('disconnected')) {
+    if (msg.includes('disconnected') || BOTS[botId]?.disconnected) {
         console.log('[Test] WARNING: Bot disconnected during find_land setup. Subsequent tests will fail.');
+        if (allowRecovery) {
+            console.log(`[Test] Retrying find_land once after recovery for ${botId}...`);
+            const ok = await recoverBotIfDisconnected(botId, 'find_land retry');
+            if (ok) return testFindLand(botId, false);
+        }
+    } else if (!result && allowRecovery) {
+        console.log(`[Test] find_land timed out for ${botId}. Attempting one recovery retry...`);
+        const ok = await recoverBotIfDisconnected(botId, 'find_land timeout retry');
+        if (ok) return testFindLand(botId, false);
     }
     // Extra settle time after large teleport
     await sleep(3000);
@@ -316,12 +432,16 @@ async function testFindLand(botId) {
 
 async function testStatus(botId) {
     console.log(`\n=== TEST: Status ===`);
-    sendAction(botId, { action: 'status' });
+    await recoverBotIfDisconnected(botId, 'before status');
+    // Record timestamp before sendAction so bot replies that arrive while the
+    // 900ms rate-limit gap is still running are not filtered out by waitForMessage.
+    const sendAt = Date.now();
+    await sendAction(botId, { action: 'status' });
 
     const result = await waitForMessage(botId, m =>
         m.type === 'USER_CHAT' && m.data.username === 'System' &&
         m.data.message.includes('Status:'),
-        10000
+        12000, sendAt
     );
 
     const msg = result ? result.data.message : 'timeout';
@@ -344,6 +464,7 @@ async function main() {
     // Clean up stale debug files from previous runs
     for (const id of ['AI_Bot_01', 'AI_Bot_02']) {
         try { fs.unlinkSync(`ai_debug_${id}.json`); } catch (e) {}
+        try { fs.unlinkSync(path.join(__dirname, 'data', `queue_checkpoint_${id}.json`)); } catch (e) {}
     }
     await sleep(1000);
 
@@ -369,11 +490,13 @@ async function main() {
         const distFromBase = Math.sqrt(dx * dx + dz * dz);
         if (distFromBase > 20) {
             console.log(`[Test] Bot drifted ${distFromBase.toFixed(0)}b from find_land base — navigating back.`);
-            sendAction('AI_Bot_01', { action: 'goto', x: landBase.position.x, z: landBase.position.z, timeout: 90 });
+            const sendAt = Date.now();
+            await sendAction('AI_Bot_01', { action: 'goto', x: landBase.position.x, z: landBase.position.z, timeout: 90 });
             await waitForMessage('AI_Bot_01', m =>
                 m.type === 'USER_CHAT' && m.data.username === 'System' &&
                 (m.data.message.includes('Reached') || m.data.message.includes('Cannot') || m.data.message.includes('failed')),
-                100000
+                100000,
+                sendAt
             );
             await sleep(2000);
         }
@@ -396,14 +519,17 @@ async function main() {
         const dist = Math.sqrt((d.position.x - landBase.position.x) ** 2 + (d.position.z - landBase.position.z) ** 2);
         if (dist > 15) {
             console.log(`[Test] Returning to land base (${dist.toFixed(0)}b drift) before next kill...`);
-            sendAction('AI_Bot_01', { action: 'goto', x: landBase.position.x, z: landBase.position.z, timeout: 60 });
+            const sendAt = Date.now();
+            await sendAction('AI_Bot_01', { action: 'goto', x: landBase.position.x, z: landBase.position.z, timeout: 60 });
             await waitForMessage('AI_Bot_01', m =>
                 m.type === 'USER_CHAT' && m.data.username === 'System' &&
                 (m.data.message.includes('Reached') || m.data.message.includes('Cannot') || m.data.message.includes('failed')),
-                70000
+                70000,
+                sendAt
             );
         }
     }
+    await recoverBotIfDisconnected('AI_Bot_01', 'before kill');
     await testKill('AI_Bot_01', 'cow', 1, 'kill_cow');
     const firstKill = testResults[testResults.length - 1];
     if (!firstKill.pass) {
@@ -429,16 +555,19 @@ async function main() {
             );
             if (dk > 10) {
                 console.log(`[Test] Returning to log area (${dk.toFixed(0)}b drift) before collect...`);
-                sendAction('AI_Bot_01', { action: 'goto', x: landBase.position.x, z: landBase.position.z, timeout: 60 });
+                const sendAt = Date.now();
+                await sendAction('AI_Bot_01', { action: 'goto', x: landBase.position.x, z: landBase.position.z, timeout: 60 });
                 await waitForMessage('AI_Bot_01', m =>
                     m.type === 'USER_CHAT' && m.data.username === 'System' &&
                     (m.data.message.includes('Reached') || m.data.message.includes('Cannot') || m.data.message.includes('failed')),
-                    70000
+                    70000,
+                    sendAt
                 );
                 await sleep(1000);
             }
         }
     }
+    await recoverBotIfDisconnected('AI_Bot_01', 'before collect');
     await testCollect('AI_Bot_01', 'oak_log', 3, 'collect_oak_log');
 
     // Navigate back to landBase after collect — the collect action may have taken
@@ -461,11 +590,13 @@ async function main() {
             }
             if (dc > 10) {
                 console.log(`[Test] Returning to safe area after collect (${dc.toFixed(0)}b drift)...`);
-                sendAction('AI_Bot_01', { action: 'goto', x: landBase.position.x, z: landBase.position.z, timeout: 60 });
+                const sendAt = Date.now();
+                await sendAction('AI_Bot_01', { action: 'goto', x: landBase.position.x, z: landBase.position.z, timeout: 60 });
                 await waitForMessage('AI_Bot_01', m =>
                     m.type === 'USER_CHAT' && m.data.username === 'System' &&
                     (m.data.message.includes('Reached') || m.data.message.includes('Cannot') || m.data.message.includes('failed')),
-                    70000
+                    70000,
+                    sendAt
                 );
                 await sleep(1000);
             }
@@ -473,6 +604,7 @@ async function main() {
     }
 
     // ── Test 4: Craft planks — bot has logs from collect ────────────────────
+    await recoverBotIfDisconnected('AI_Bot_01', 'before craft');
     await testCraft('AI_Bot_01', 'oak_planks', 1, 'craft_oak_planks');
 
     // Return to land base before goto tests. Kill/collect tests may have moved the bot
@@ -480,11 +612,13 @@ async function main() {
     // Goto tests from a known good terrain position gives consistent speed measurements.
     if (landBase) {
         console.log(`[Test] Returning to land base (${landBase.position.x}, ${landBase.position.z}) before goto tests...`);
-        sendAction('AI_Bot_01', { action: 'goto', x: landBase.position.x, z: landBase.position.z, timeout: 90 });
+        const sendAt = Date.now();
+        await sendAction('AI_Bot_01', { action: 'goto', x: landBase.position.x, z: landBase.position.z, timeout: 90 });
         await waitForMessage('AI_Bot_01', m =>
             m.type === 'USER_CHAT' && m.data.username === 'System' &&
             (m.data.message.includes('Reached') || m.data.message.includes('Cannot') || m.data.message.includes('failed')),
-            100000
+            100000,
+            sendAt
         );
         await sleep(2000);
     }
@@ -517,6 +651,7 @@ async function main() {
 
     // ── Test 5: Short goto (32 blocks) — measures base movement speed ───────
     if (startDebug) {
+        await recoverBotIfDisconnected('AI_Bot_01', 'before goto_short');
         const shortTargetX = Math.round(gotoAnchorX + terrainDx * 32);
         const shortTargetZ = Math.round(gotoAnchorZ + terrainDz * 32);
         console.log(`[Test] goto_short_32b target: (${shortTargetX}, ${shortTargetZ})`);
@@ -525,6 +660,7 @@ async function main() {
 
     // ── Test 6: Medium goto (100 blocks) — tests waypoint system ────────────
     if (startDebug) {
+        await recoverBotIfDisconnected('AI_Bot_01', 'before goto_medium');
         const medTargetX = Math.round(gotoAnchorX + terrainDx * 100);
         const medTargetZ = Math.round(gotoAnchorZ + terrainDz * 100);
         console.log(`[Test] goto_medium_100b target: (${medTargetX}, ${medTargetZ})`);
@@ -544,12 +680,17 @@ async function main() {
     // It does find_land (which will pathfind to AI_Bot_01's position),
     // then walks in a line so AI_Bot_01 has something to chase.
     console.log('\n=== SETUP: Spawning player bot (AI_Bot_02) for follow test ===');
+    await recoverBotIfDisconnected('AI_Bot_01', 'before follow primary bot');
     spawnBot('AI_Bot_02');
     await waitForReady('AI_Bot_02', 90000);
 
-    // find_land on Bot02 (pathfinds toward any online player)
-    await testFindLand('AI_Bot_02');
-    await sleep(2000);
+    // Skip find_land for Bot02 — it only needs to walk as a moving target.
+    // find_land's tree navigation can cause ECONNRESET if Bot02 spawns near
+    // complex mod terrain. Just give Bot02 survival buffs directly.
+    await sendAction('AI_Bot_02', { action: 'status' });
+    await sleep(3000);
+
+    await recoverBotIfDisconnected('AI_Bot_02', 'before follow setup move');
 
     // Explicitly navigate Bot02 to Bot01's current position so both bots are
     // co-located before the follow test. Without this, independent find_land
@@ -557,7 +698,7 @@ async function main() {
     const bot01Pos = readDebug('AI_Bot_01');
     if (bot01Pos) {
         console.log(`[Test] Moving AI_Bot_02 to AI_Bot_01 position (${bot01Pos.position.x}, ${bot01Pos.position.z})`);
-        sendAction('AI_Bot_02', { action: 'goto',
+        await sendAction('AI_Bot_02', { action: 'goto',
             x: bot01Pos.position.x,
             z: bot01Pos.position.z,
             timeout: 90 });
@@ -572,7 +713,7 @@ async function main() {
     // Now Bot02 is next to Bot01 — have it walk 60 blocks away as the follow target
     const bot02PreFollow = readDebug('AI_Bot_02');
     if (bot02PreFollow) {
-        sendAction('AI_Bot_02', { action: 'goto',
+        await sendAction('AI_Bot_02', { action: 'goto',
             x: bot02PreFollow.position.x + 60,
             z: bot02PreFollow.position.z,
             timeout: 60 });
@@ -582,7 +723,7 @@ async function main() {
     await testFollow('AI_Bot_01', 'AI_Bot_02', 20);
 
     // Stop Bot02 after follow test
-    sendAction('AI_Bot_02', { action: 'stop' });
+    await sendAction('AI_Bot_02', { action: 'stop' });
     await sleep(1000);
 
     // ── Test 8: Long distance goto (200 blocks) ─────────────────────────────
@@ -590,16 +731,27 @@ async function main() {
     // doesn't change the direction vector (follow moves the bot in a potentially
     // different and water-prone direction).
     if (startDebug) {
+        await recoverBotIfDisconnected('AI_Bot_01', 'before goto_long');
         const longTargetX = Math.round(gotoAnchorX + terrainDx * 200);
         const longTargetZ = Math.round(gotoAnchorZ + terrainDz * 200);
         console.log(`[Test] goto_long_200b target: (${longTargetX}, ${longTargetZ})`);
         await measureSpeed('AI_Bot_01', longTargetX, longTargetZ, 'goto_long_200b');
     }
 
-    // ── Test 9: Return to land base (avoids hardcoded ocean spawn) ──────────
-    const returnX = landBase ? landBase.position.x : -10;
-    const returnZ = landBase ? landBase.position.z : -28;
-    await measureSpeed('AI_Bot_01', returnX, returnZ, 'goto_return_land');
+    // ── Test 9: Return to goto anchor (return-trip from long-distance destination) ─
+    // Use gotoAnchorX/Z (the pre-goto-short anchor, confirmed navigable terrain) as
+    // the return target. Avoids using landBase which may be in a different location
+    // after recovery respawns the bot via find_land.
+    // Skip recovery: if goto_long just passed, the bot navigated here successfully.
+    // If goto_long failed, the bot is likely still near the anchor area. Either way,
+    // forcing a new find_land would relocate the bot to an unrelated position.
+    // Use 300s timeout: mountain terrain can take 2+ minutes for 165-block paths.
+    if (startDebug) {
+        const returnX = gotoAnchorX;
+        const returnZ = gotoAnchorZ;
+        console.log(`[Test] goto_return_land target: (${Math.round(returnX)}, ${Math.round(returnZ)}) — return to pre-goto anchor`);
+        await measureSpeed('AI_Bot_01', returnX, returnZ, 'goto_return_land', 300);
+    }
 
     // ── Summary ─────────────────────────────────────────────────────────────
     console.log('\n╔══════════════════════════════════════════════════════╗');

@@ -1,19 +1,21 @@
 {
-  "timestamp": "2026-03-27T10:05:31.784Z",
+  "timestamp": "2026-04-06T04:52:46.297Z",
   "ready": true,
   "position": {
-    "x": 1371.6,
-    "y": 8,
-    "z": 836.5
+    "x": 23.3,
+    "y": 84,
+    "z": 32.3
   },
   "health": 20,
-  "food": 17,
-  "isExecuting": true,
+  "food": 20,
+  "dimension": "overworld",
+  "isExecuting": false,
+  "currentAction": null,
   "actionQueue": [],
   "treeDir": null,
   "inventory": [
     {
-      "name": "unknown",
+      "name": "create:metal_girder",
       "count": 1
     }
   ],
@@ -22,6 +24,6 @@
     "torso": null,
     "legs": null,
     "feet": null,
-    "hand": "unknown"
+    "hand": "create:metal_girder"
   }
 }

@@ -3,6 +3,8 @@
 ## Active
 
 ## Completed
+- BUGFIX-20260406-002-auxmod-minimal-player-telemetry: Simplify aux-mod entity update payload to playerName/dimension/position only (no viewport-derived data)
+- BUGFIX-20260406-001-follow-visibility-flight-intent: Harden come/follow out-of-view continuity and normalize jetpack/elytra flight intent to fly action
 - TASK-20260404-002-knowledge-ui-ops: Add WebUI knowledge operations (crawl status + local search), run crawl continuation, and validate with npm test
 - TASK-20260320-002-post-fix-smoke-sync: Run npm test and update STATE.yaml and ACTIVITY_SUMMARY.md for race-condition fix
 - TASK-20260320-001-verify-docker-environment: Verify Docker environment and run npm test suite inside container
