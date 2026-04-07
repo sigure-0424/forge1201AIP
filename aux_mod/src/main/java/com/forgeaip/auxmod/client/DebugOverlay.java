@@ -13,9 +13,12 @@ import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import org.joml.Matrix4f;
 
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.WebSocket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -56,9 +59,9 @@ public class DebugOverlay {
     /** Volatile: bot position [x,y,z] for label. */
     private static volatile double[] botPos = null;
 
-    // ── WebSocket (plain Java — uses OkHttp that ships with Minecraft/Forge) ──
-    private static okhttp3.OkHttpClient httpClient = null;
-    private static okhttp3.WebSocket wsClient = null;
+    // ── WebSocket (java.net.http — built into JDK 11+, no external dependency) ──
+    private static final HttpClient httpClient = HttpClient.newHttpClient();
+    private static WebSocket wsClient = null;
     private static final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "DebugOverlay-WS");
@@ -71,16 +74,8 @@ public class DebugOverlay {
      * WebSocket connection attempt.
      */
     public static void init() {
-        try {
-            httpClient = new okhttp3.OkHttpClient.Builder()
-                    .connectTimeout(5, TimeUnit.SECONDS)
-                    .readTimeout(0, TimeUnit.SECONDS) // WS: no read timeout
-                    .build();
-            scheduleConnect();
-            AuxMod.LOGGER.info("[DebugOverlay] Initialized, connecting to ws://localhost:3001");
-        } catch (Exception e) {
-            AuxMod.LOGGER.warn("[DebugOverlay] Failed to init OkHttpClient: {}", e.getMessage());
-        }
+        scheduleConnect();
+        AuxMod.LOGGER.info("[DebugOverlay] Initialized, connecting to ws://localhost:3001");
     }
 
     private static void scheduleConnect() {
@@ -88,43 +83,58 @@ public class DebugOverlay {
     }
 
     private static void connect() {
-        if (httpClient == null) return;
         try {
-            okhttp3.Request request = new okhttp3.Request.Builder()
-                    .url("ws://localhost:3001")
-                    .build();
-            wsClient = httpClient.newWebSocket(request, new WsListener());
+            httpClient.newWebSocketBuilder()
+                    .connectTimeout(java.time.Duration.ofSeconds(5))
+                    .buildAsync(URI.create("ws://localhost:3001"), new WsListener())
+                    .whenComplete((ws, ex) -> {
+                        if (ex != null) {
+                            AuxMod.LOGGER.debug("[DebugOverlay] WS connect failed: {}", ex.getMessage());
+                            scheduler.schedule(DebugOverlay::connect, 5, TimeUnit.SECONDS);
+                        } else {
+                            wsClient = ws;
+                            AuxMod.LOGGER.info("[DebugOverlay] Connected to debug WS server.");
+                        }
+                    });
         } catch (Exception e) {
-            AuxMod.LOGGER.debug("[DebugOverlay] WS connect failed: {}", e.getMessage());
+            AuxMod.LOGGER.debug("[DebugOverlay] WS connect error: {}", e.getMessage());
             scheduler.schedule(DebugOverlay::connect, 5, TimeUnit.SECONDS);
         }
     }
 
     // ── WebSocket listener ────────────────────────────────────────────────────
-    private static class WsListener extends okhttp3.WebSocketListener {
+    private static class WsListener implements WebSocket.Listener {
+        private final StringBuilder textAccumulator = new StringBuilder();
+
         @Override
-        public void onOpen(okhttp3.WebSocket webSocket, okhttp3.Response response) {
-            AuxMod.LOGGER.info("[DebugOverlay] Connected to debug WS server.");
+        public void onOpen(WebSocket ws) {
+            ws.request(1);
         }
 
         @Override
-        public void onMessage(okhttp3.WebSocket webSocket, String text) {
-            try {
-                handleMessage(text);
-            } catch (Exception e) {
-                AuxMod.LOGGER.debug("[DebugOverlay] Message parse error: {}", e.getMessage());
+        public CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
+            textAccumulator.append(data);
+            if (last) {
+                String message = textAccumulator.toString();
+                textAccumulator.setLength(0);
+                try { handleMessage(message); } catch (Exception e) {
+                    AuxMod.LOGGER.debug("[DebugOverlay] Message parse error: {}", e.getMessage());
+                }
             }
+            ws.request(1);
+            return null;
         }
 
         @Override
-        public void onFailure(okhttp3.WebSocket webSocket, Throwable t, okhttp3.Response response) {
-            AuxMod.LOGGER.debug("[DebugOverlay] WS failure: {}", t.getMessage());
-            scheduler.schedule(DebugOverlay::connect, 5, TimeUnit.SECONDS);
-        }
-
-        @Override
-        public void onClosed(okhttp3.WebSocket webSocket, int code, String reason) {
+        public CompletionStage<?> onClose(WebSocket ws, int statusCode, String reason) {
             AuxMod.LOGGER.debug("[DebugOverlay] WS closed: {}", reason);
+            scheduler.schedule(DebugOverlay::connect, 5, TimeUnit.SECONDS);
+            return null;
+        }
+
+        @Override
+        public void onError(WebSocket ws, Throwable error) {
+            AuxMod.LOGGER.debug("[DebugOverlay] WS error: {}", error.getMessage());
             scheduler.schedule(DebugOverlay::connect, 5, TimeUnit.SECONDS);
         }
     }
@@ -224,7 +234,6 @@ public class DebugOverlay {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) return;
 
-        com.mojang.math.Matrix4f projMatrix = event.getProjectionMatrix();
         Matrix4f poseMatrix = event.getPoseStack().last().pose();
 
         // Camera offset
