@@ -333,6 +333,87 @@ class DynamicRegistryInjector {
 
         console.log(`[DynamicRegistry] Mapped ${mappedCount} vanilla blocks. Injected ${dummyCount} MOD blocks.`);
     }
+
+    // ── Server Registry (authoritative, from aux_mod BlockRegistryExporter) ──────
+    // Replaces the heuristic binary scan with exact Forge-remapped IDs.
+    // Call this AFTER injectBlockToRegistry when server_registry.json is available.
+    injectFromServerRegistry(serverData) {
+        if (!serverData) return;
+        const stoneTemplate = this.registry.blocksByName['stone'];
+        const airTemplate   = this.registry.blocksByName['air'];
+        let blockCount = 0, itemCount = 0;
+
+        // ── Blocks ──────────────────────────────────────────────────────────
+        for (const entry of (serverData.blocks || [])) {
+            if (!entry.name || entry.minStateId == null) continue;
+            const shortName = entry.name.split(':')[1] || entry.name;
+            const dictEntry = this.modBlocksDictionary[entry.name];
+            const useAir    = entry.isAir || entry.isLiquid || (dictEntry && dictEntry.boundingBox === 'empty');
+            const template  = useAir ? airTemplate : stoneTemplate;
+
+            const modBlock = {
+                ...template,
+                id:           entry.minStateId,
+                name:         entry.name,
+                displayName:  shortName,
+                defaultState: entry.defaultStateId ?? entry.minStateId,
+                minStateId:   entry.minStateId,
+                maxStateId:   entry.maxStateId ?? entry.minStateId,
+            };
+
+            if (dictEntry) {
+                if (dictEntry.hardness   !== undefined) modBlock.hardness    = dictEntry.hardness;
+                if (dictEntry.transparent !== undefined) modBlock.transparent = dictEntry.transparent;
+                if (dictEntry.boundingBox !== undefined) modBlock.boundingBox = dictEntry.boundingBox;
+            }
+            if (entry.isAir)    modBlock.boundingBox = 'empty';
+            if (entry.isLiquid) modBlock.boundingBox = 'empty';
+
+            // Register every state ID in the range
+            for (let sid = entry.minStateId; sid <= (entry.maxStateId ?? entry.minStateId); sid++) {
+                this.registry.blocks[sid]          = modBlock;
+                if (this.registry.blocksByStateId) this.registry.blocksByStateId[sid] = modBlock;
+            }
+            this.registry.blocksByName[entry.name] = modBlock;
+            this.registry.blocksByName[shortName]  = modBlock;
+
+            if (this.registry.blockCollisionShapes?.blocks) {
+                const shape = (!entry.isAir && !entry.isLiquid) ? 1 : 0;
+                this.registry.blockCollisionShapes.blocks[entry.name] = shape;
+                this.registry.blockCollisionShapes.blocks[shortName]  = shape;
+            }
+            blockCount++;
+        }
+
+        // ── Items ────────────────────────────────────────────────────────────
+        for (const entry of (serverData.items || [])) {
+            if (!entry.name || entry.id == null) continue;
+            const shortName = entry.name.split(':')[1] || entry.name;
+            const dummyItem = {
+                id:          entry.id,
+                name:        entry.name,
+                displayName: shortName,
+                stackSize:   entry.maxStackSize ?? 64,
+            };
+            if (!this.registry.items)       this.registry.items       = {};
+            if (!this.registry.itemsByName) this.registry.itemsByName = {};
+            this.registry.items[entry.id]       = dummyItem;
+            this.registry.itemsByName[entry.name] = dummyItem;
+            this.registry.itemsByName[shortName]  = dummyItem;
+            // Also patch any existing 'unknown' item objects that already have this numeric ID
+            if (this.registry.itemsArray?.[entry.id]?.name === 'unknown') {
+                this.registry.itemsArray[entry.id].name        = entry.name;
+                this.registry.itemsArray[entry.id].displayName = shortName;
+            }
+            itemCount++;
+        }
+
+        if (this.registry.blocksArray) {
+            this.registry.blocksArray = Object.values(this.registry.blocksByName);
+        }
+
+        console.log(`[DynamicRegistry] Server registry applied: ${blockCount} mod blocks, ${itemCount} mod items.`);
+    }
 }
 
 module.exports = DynamicRegistryInjector;

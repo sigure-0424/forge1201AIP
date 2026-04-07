@@ -29,7 +29,8 @@ class WebUIServer {
     // ─── Middleware ───────────────────────────────────────────────────────────
 
     _setupMiddleware() {
-        this.app.use(express.json());
+        // 10 MB limit to accommodate aux_mod BlockRegistryExporter payloads (~300 KB typical).
+        this.app.use(express.json({ limit: '10mb' }));
         this.app.use(express.static(path.join(__dirname, '../public')));
     }
 
@@ -421,6 +422,41 @@ class WebUIServer {
                 });
             }
             res.json({ ok: true });
+        });
+
+        // POST /api/block-registry — receive authoritative block/item registry from aux_mod.
+        // The BlockRegistryExporter (Java) calls this on ServerStartedEvent with the exact
+        // Forge-remapped numeric IDs. Data is persisted to disk so bots connecting later
+        // (after aux_mod has already sent the data) can still use it.
+        this.app.post('/api/block-registry', (req, res) => {
+            const data = req.body;
+            if (!data || (!Array.isArray(data.blocks) && !Array.isArray(data.items))) {
+                return res.status(400).json({ error: 'Expected { blocks: [...], items: [...] }' });
+            }
+            try {
+                const registryPath = path.join(process.cwd(), 'data', 'server_registry.json');
+                fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+                fs.writeFileSync(registryPath, JSON.stringify(data));
+                console.log(`[WebUI] Block registry received: ${(data.blocks || []).length} blocks, ${(data.items || []).length} items. Saved to data/server_registry.json`);
+                // Notify all connected bots that fresh registry data is available.
+                this._broadcast({ type: 'server_registry_updated' });
+                res.json({ ok: true });
+            } catch (e) {
+                console.error(`[WebUI] Failed to save block registry: ${e.message}`);
+                res.status(500).json({ error: e.message });
+            }
+        });
+
+        // GET /api/block-registry — let bots fetch the stored registry on demand.
+        this.app.get('/api/block-registry', (req, res) => {
+            const registryPath = path.join(process.cwd(), 'data', 'server_registry.json');
+            if (!fs.existsSync(registryPath)) return res.status(404).json({ error: 'No registry data yet' });
+            try {
+                res.setHeader('Content-Type', 'application/json');
+                res.send(fs.readFileSync(registryPath));
+            } catch (e) {
+                res.status(500).json({ error: e.message });
+            }
         });
     }
 
