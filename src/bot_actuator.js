@@ -111,6 +111,39 @@ bot.on('inject_allowed', () => {
         const injector = new DynamicRegistryInjector(bot.registry);
         const parsed = injector.parseRegistryPayload(registrySyncBuffer);
         injector.injectBlockToRegistry(parsed);
+
+        // Apply authoritative server registry from aux_mod (BlockRegistryExporter).
+        // The aux_mod writes forgeaip_registry.json to the server's working directory.
+        // We check several candidate paths so the setup works regardless of how the
+        // server and bot are deployed relative to each other.
+        const _fs   = require('fs');
+        const _path = require('path');
+        const registryCandidates = [
+            // 1. Explicit server dir via env (most reliable when set).
+            process.env.MC_SERVER_DIR ? _path.join(process.env.MC_SERVER_DIR, 'forgeaip_registry.json') : null,
+            // 2. Sibling directory on same drive.
+            'E:/forge1201server/forgeaip_registry.json',
+            // 3. Bot-side copy (written by web_ui_server /api/block-registry POST endpoint).
+            _path.join(process.cwd(), 'data', 'server_registry.json'),
+        ].filter(Boolean);
+
+        let registryApplied = false;
+        for (const candidate of registryCandidates) {
+            try {
+                if (_fs.existsSync(candidate)) {
+                    const serverData = JSON.parse(_fs.readFileSync(candidate, 'utf8'));
+                    injector.injectFromServerRegistry(serverData);
+                    console.log(`[Actuator] Authoritative server registry applied from ${candidate}`);
+                    registryApplied = true;
+                    break;
+                }
+            } catch (e) {
+                console.warn(`[Actuator] Could not apply server registry from ${candidate}: ${e.message}`);
+            }
+        }
+        if (!registryApplied) {
+            console.log('[Actuator] No server registry found — aux_mod will write it on next server start.');
+        }
     });
 });
 
@@ -1578,6 +1611,8 @@ const NON_RESUMABLE_ACTIONS = new Set(['give', 'smelt', 'brew', 'enchant', 'acti
 const JETPACK_MOD_REGISTRY = {
     simplyjetpacks2:  { itemPattern: /jetpack/i, ascendControl: 'jump' },
     simplerjetpacks2: { itemPattern: /jetpack/i, ascendControl: 'jump' },
+    // Create Jetpack mod — uses jump for thrust, same as others.
+    create_jetpack:   { itemPattern: /jetpack/i, ascendControl: 'jump' },
     // Generic fallback: covers any mod item with "jetpack" in the local name.
     _generic:         { itemPattern: /jetpack/i, ascendControl: 'jump' },
 };
