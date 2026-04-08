@@ -564,6 +564,8 @@ bot.on('spawn', async () => {
         // Close-range (≤3.5 blocks) enemies are attacked immediately even during
         // pathfinding, acting as a melee "interrupt" without stopping movement.
         // Further enemies are handled by the idle combat loop (runWaitLoop).
+        // Issue 4 fix: only attack/engage hostiles that are actively approaching the
+        // bot or already in very close range (≤2 blocks), not every mob nearby.
         _passiveDefenseInterval = setInterval(() => {
             if (_inBossCombat) return; // Boss combat handles its own defense
             if (!bot.entity || bot.health <= 0) return;
@@ -575,7 +577,10 @@ bot.on('spawn', async () => {
                 return;
             }
             const distToHostile = bot.entity.position.distanceTo(hostile.position);
-            if (distToHostile <= 3.5) {
+            // Issue 4 fix: only engage if the hostile is actually approaching the bot
+            // (velocity toward bot) or is within immediate melee reach (≤2 blocks).
+            // This prevents interrupting active tasks for mobs wandering harmlessly nearby.
+            if (distToHostile <= 3.5 && isHostileApproachingBot(hostile)) {
                 // Issue 3: attack in melee range even during movement (interrupt)
                 bot.deactivateItem();
                 bot.attack(hostile);
@@ -812,6 +817,11 @@ bot.on('spawn', async () => {
                 if (onGround || inWater) {
                     _fallStartY = null;
                     _mlgAttempted = false;
+                    // Issue 2 fix: reset jetpack sneak-fall flag and release sneak on landing
+                    if (_jetpackSneakFallActive) {
+                        _jetpackSneakFallActive = false;
+                        bot.setControlState('sneak', false);
+                    }
                 } else {
                     // Issue 2: Track free-fall regardless of pathfinder state.
                     // maxDropDown=3 limits planned descents but unexpected falls (knockback,
@@ -819,6 +829,20 @@ bot.on('spawn', async () => {
                     if (_fallStartY === null) _fallStartY = curY;
                     const fallDist = _fallStartY - curY;
                     if (fallDist > 4 && !_mlgAttempted) {
+                        // Issue 2 fix: if jetpack is equipped, engage sneak immediately to
+                        // trigger the jetpack mod's slow-fall / hover mode.  Most mod jetpacks
+                        // prevent fall damage while sneak is held while airborne.  Do this as
+                        // soon as a real fall (>4 blocks) is detected — before ground check.
+                        if (!_jetpackSneakFallActive) {
+                            const _ftTorso = bot.inventory.slots[bot.getEquipmentDestSlot('torso')];
+                            const _ftAv = detectAviationMethod(_ftTorso);
+                            if (_ftAv && _ftAv.type === 'jetpack') {
+                                _jetpackSneakFallActive = true;
+                                bot.setControlState('sneak', true);
+                                console.log('[Actuator] Unexpected fall detected — engaging jetpack sneak for soft landing.');
+                            }
+                        }
+
                         // Find distance to solid ground below
                         const cx = Math.floor(bot.entity.position.x);
                         const cz = Math.floor(bot.entity.position.z);
@@ -833,7 +857,7 @@ bot.on('spawn', async () => {
                         // Trigger MLG within 6 blocks of ground (wider window = more reliable)
                         if (groundY !== null && curY - groundY <= 6) {
                             const wb = bot.inventory.items().find(i => i.name === 'water_bucket');
-                            if (wb) {
+                            if (wb && !_jetpackSneakFallActive) {
                                 _mlgAttempted = true;
                                 bot.equip(wb, 'hand').then(async () => {
                                     try {
@@ -1721,6 +1745,9 @@ const _lootedChests = new Set();
 let _fallStartY = null;
 let _mlgAttempted = false;
 let _lavaEscapeActive = false;
+// Issue 2 fix: tracks when jetpack sneak slow-fall has been engaged to avoid
+// re-triggering every physics tick during the same fall.
+let _jetpackSneakFallActive = false;
 
 // Body (Action)
 let actionQueue = [];
@@ -2095,6 +2122,32 @@ function findNearestHostile(maxDist = 6) {
         if (d < minDist) { minDist = d; nearest = ent; }
     }
     return nearest;
+}
+
+// Returns true if the hostile entity is an immediate threat: either within
+// close-range melee distance OR actively moving toward the bot.
+// Used by the passive defense interval and idle combat loop to avoid chasing
+// mobs that are wandering nearby without targeting the bot.
+// MELEE_THREAT_DIST matches the 3.5-block melee-attack range used elsewhere.
+const MELEE_THREAT_DIST = 3.5;
+// Minimum horizontal speed (blocks/tick) to consider an entity "meaningfully moving".
+const MIN_APPROACH_SPEED = 0.05;
+function isHostileApproachingBot(hostile) {
+    if (!bot.entity || !hostile || !hostile.isValid) return false;
+    const dist = bot.entity.position.distanceTo(hostile.position);
+    // Within melee range — always treat as immediate threat
+    if (dist <= MELEE_THREAT_DIST) return true;
+    // Aggroed neutrals that already attacked are always a threat
+    if (_aggroedNeutrals.has(hostile.id)) return true;
+    // Check velocity vector: positive dot product with direction-to-bot means approaching
+    const v = hostile.velocity;
+    if (!v) return false;
+    const horizSpeed = Math.sqrt(v.x * v.x + v.z * v.z);
+    if (horizSpeed < MIN_APPROACH_SPEED) return false; // not meaningfully moving
+    const dx = bot.entity.position.x - hostile.position.x;
+    const dz = bot.entity.position.z - hostile.position.z;
+    const dotProduct = (v.x * dx + v.z * dz) / dist;
+    return dotProduct > 0; // positive = velocity directed toward bot
 }
 
 // ─── Underground resource set ──────────────────────────────────────────────────
@@ -3721,8 +3774,9 @@ async function _killEnderDragon(cancelToken, combatMs, combatStart) {
 
 // ─── Idle Combat Loop ─────────────────────────────────────────────────────────
 // Issue 6: Runs after completing all queued actions (and as the 'wait' action).
-// Fights hostiles within 16 blocks and chases those within 12 blocks,
-// until the cancel token is set (new instruction arrives or bot is stopped).
+// Fights hostiles within 16 blocks and chases those within 12 blocks that are
+// actively approaching the bot. Passive mobs (not moving toward bot) are ignored
+// to avoid abandoning tasks for harmless wandering mobs.
 async function runWaitLoop() {
     while (!currentCancelToken.cancelled && !_inStopMode) {
         if (!bot.entity || bot.health <= 0) {
@@ -3742,8 +3796,13 @@ async function runWaitLoop() {
                 equipBestWeapon().catch(() => {});
                 const offHand = bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')];
                 if (offHand?.name === 'shield') bot.activateItem(true);
-            } else if (dist <= 12) {
+            } else if (dist <= 12 && isHostileApproachingBot(hostile)) {
+                // Issue 4 fix: only chase mobs that are actively moving toward the bot,
+                // not every mob within range that is wandering without targeting the bot.
                 bot.pathfinder.setGoal(new goals.GoalFollow(hostile, 2), true);
+            } else {
+                // Mob exists but is not approaching — stay put, don't pursue
+                if (bot.pathfinder.isMoving()) bot.pathfinder.setGoal(null);
             }
         } else {
             if (bot.pathfinder.isMoving()) bot.pathfinder.setGoal(null);
@@ -4463,8 +4522,30 @@ async function processActionQueue() {
                             // engages server-side (most mods prevent fall damage while
                             // sneaking or while jump=true; we clear jump in _jStop).
                             if (_jActive && dy < 5 && dist < 4) {
-                                _jStop();
-                                bot.setControlState('sneak', true); // safe descent
+                                // Issue 1 fix: before stopping jetpack, check for solid ground
+                                // within 2 blocks below the bot.  If the bot is hovering over a
+                                // cliff edge there is no ground nearby and stopping the jetpack
+                                // would cause an uncontrolled fall.  In that case, hold sneak
+                                // and gently descend via the PID until solid ground is detected.
+                                const _byFloor = Math.floor(bot.entity.position.y);
+                                const _bx = Math.floor(bot.entity.position.x);
+                                const _bz = Math.floor(bot.entity.position.z);
+                                let _groundNearby = bot.entity.onGround;
+                                if (!_groundNearby) {
+                                    for (let _yOffset = 0; _yOffset >= -2; _yOffset--) {
+                                        const _blk = bot.blockAt(new Vec3(_bx, _byFloor + _yOffset, _bz));
+                                        if (_blk && _blk.boundingBox === 'block') { _groundNearby = true; break; }
+                                    }
+                                }
+                                if (_groundNearby) {
+                                    _jStop();
+                                    bot.setControlState('sneak', true); // safe descent
+                                } else {
+                                    // Over a cliff — hold sneak and gently descend until landing
+                                    bot.setControlState('sneak', true);
+                                    bot.setControlState('jump', false); // reduce upward thrust
+                                    if (_jTargetY !== null) _jTargetY = bot.entity.position.y - 0.5; // descend slowly
+                                }
                             }
 
                             // IDLE→ACTIVE: player significantly above bot
@@ -4484,6 +4565,12 @@ async function processActionQueue() {
                             // forward+sprint are set in _jStart; physicsTick handles
                             // vertical.  Pathfinder is paused (setGoal(null) in _jStart).
                             if (_jActive) {
+                                // Issue 1 fix: if bot landed during cliff descent, finalise stop.
+                                if (bot.entity.onGround && dy < 5) {
+                                    _jStop();
+                                    bot.setControlState('sneak', false);
+                                    return;
+                                }
                                 if (dist > 2) {
                                     try { await bot.lookAt(new Vec3(p.x, bot.entity.position.y, p.z), true); } catch (_) {}
                                 }
@@ -5018,21 +5105,30 @@ async function processActionQueue() {
                                 bot.pathfinder.setGoal(new goals.GoalXZ(_sw.x, _sw.z), true);
 
                             } else {
-                                // Severe: first try jetpack if destination is higher and
-                                // a jetpack is equipped — covers the common "hollow below
-                                // hill" scenario where ground pathing enters a cave at the
-                                // correct XZ but can never reach the target Y.
-                                const _yGap = destY !== undefined ? (destY - bot.entity.position.y) : 0;
-                                if (_yGap >= 8 && _stuckCount === 5) { // try once at count=5
+                                // Severe: try jetpack if a jetpack is equipped.
+                                // Issue 3 fix: previously only tried jetpack when destY gap >= 8.
+                                // Now always attempt jetpack escape when stuck at count=5, flying
+                                // at least JETPACK_OBSTACLE_CLEARANCE blocks above current position
+                                // to clear any obstacle — even when no explicit Y coordinate was given.
+                                // DEST_ALTITUDE_MARGIN: extra blocks above destY to ensure clearance.
+                                // JETPACK_OBSTACLE_CLEARANCE: min blocks above bot when no destY given.
+                                const DEST_ALTITUDE_MARGIN    = 2;  // blocks above destY for clearance
+                                const JETPACK_OBSTACLE_CLEARANCE = 10; // min climb when destY unknown
+                                const JETPACK_DEFAULT_CLIMB   = 15; // climb when no destY provided at all
+                                if (_stuckCount === 5) { // try once at count=5
                                     const _escIdx  = bot.getEquipmentDestSlot('torso');
                                     const _escItem = bot.inventory.slots[_escIdx];
                                     const _escAv   = detectAviationMethod(_escItem);
                                     if (_escAv && _escAv.type === 'jetpack') {
                                         const _escFuel = getJetpackFuelRatio(_escItem, _escAv.config);
                                         if (_escFuel > (_escAv.config.fuelCritical ?? 0.05)) {
-                                            bot.chat('[System] Stuck below target elevation — using jetpack to climb over obstacle.');
+                                            // Fly to destination at obstacle-clearing altitude
+                                            const _flyY = destY !== undefined
+                                                ? Math.max(destY + DEST_ALTITUDE_MARGIN, bot.entity.position.y + JETPACK_OBSTACLE_CLEARANCE)
+                                                : bot.entity.position.y + JETPACK_DEFAULT_CLIMB;
+                                            bot.chat('[System] Stuck — using jetpack to fly over obstacle.');
                                             try {
-                                                await flyWithJetpack(destX, destY + 2, destZ, _escAv.config, currentCancelToken);
+                                                await flyWithJetpack(destX, _flyY, destZ, _escAv.config, currentCancelToken);
                                             } catch (_e) {}
                                             _stLastPos  = bot.entity.position.clone();
                                             _stLastTime = Date.now();
