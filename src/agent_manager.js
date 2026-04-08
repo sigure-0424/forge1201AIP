@@ -743,6 +743,7 @@ Current Environment: ${JSON.stringify(data.environment)}${targetedBlockContext}$
 *CRITICAL*: If a SYSTEM FEEDBACK message lists missing raw materials for a craft, you must generate actions to ONLY collect those specific raw materials.
 *CRITICAL*: Always use the longest timeout that makes sense. Collection of many blocks needs timeout:120 or more.
 *CRITICAL*: If the user provides only two numbers for coordinates, assign them to X and Z, omit Y.
+*CRITICAL*: If a SYSTEM FEEDBACK says "Failed to reach destination", respond ONLY with [{"action":"status"}]. Do NOT use navigate_portal, activate_end_portal, or any dimension-travel as recovery for a failed goto/movement.
 
 ━━━ BASIC ACTIONS ━━━
 [{"action": "chat", "message": "text"}]

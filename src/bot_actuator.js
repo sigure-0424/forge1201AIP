@@ -365,11 +365,14 @@ bot.on('spawn', async () => {
     bot.pathfinder.thinkTimeout = 5000;
     bot.pathfinder.tickTimeout = 5;
 
-    // VDS-001: Wrap pathfinder.goto to broadcast path goal to WebUI map overlay.
+    // VDS-001: Wrap pathfinder.goto/setGoal to broadcast path goals to overlays.
+    // Most long-distance movement uses setGoal(..., true), so wrapping only goto
+    // misses the majority of runtime paths.
     if (!bot.pathfinder._vds_wrapped) {
         bot.pathfinder._vds_wrapped = true;
         const _origGoto = bot.pathfinder.goto.bind(bot.pathfinder);
-        bot.pathfinder.goto = function(goal, ...rest) {
+        const _origSetGoal = bot.pathfinder.setGoal.bind(bot.pathfinder);
+        const _emitPath = (goal) => {
             try {
                 const pos = bot.entity?.position;
                 const gx = goal?.x ?? goal?.centerX;
@@ -377,11 +380,54 @@ bot.on('spawn', async () => {
                 const gz = goal?.z ?? goal?.centerZ;
                 const points = [];
                 if (pos) points.push([Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z)]);
-                if (gx != null) points.push([Math.floor(gx), Math.floor(gy ?? 0), Math.floor(gz ?? 0)]);
-                debugWS.broadcast('path', { botId, points });
+                if (gx != null) points.push([Math.floor(gx), Math.floor(gy ?? (pos?.y ?? 0)), Math.floor(gz ?? 0)]);
+                if (points.length > 1) debugWS.broadcast('path', { botId, points });
             } catch (_) {}
+        };
+        bot.pathfinder.goto = function(goal, ...rest) {
+            _emitPath(goal);
             return _origGoto(goal, ...rest);
         };
+        bot.pathfinder.setGoal = function(goal, dynamic = false) {
+            _emitPath(goal);
+            return _origSetGoal(goal, dynamic);
+        };
+
+        // Broadcast actual pathfinder nodes so overlays show the real route shape,
+        // not only a straight start->goal segment.
+        bot.on('path_update', (result) => {
+            try {
+                const path = Array.isArray(result?.path) ? result.path : [];
+                if (path.length < 2) return;
+                // Downsample long paths to keep WS payloads lightweight while preserving shape.
+                const maxPoints = 80;
+                const stride = Math.max(1, Math.ceil(path.length / maxPoints));
+                const points = [];
+                for (let i = 0; i < path.length; i += stride) {
+                    const n = path[i];
+                    if (!n) continue;
+                    const x = Number.isFinite(n.x) ? n.x : Number.isFinite(n?.pos?.x) ? n.pos.x : null;
+                    const y = Number.isFinite(n.y) ? n.y : Number.isFinite(n?.pos?.y) ? n.pos.y : null;
+                    const z = Number.isFinite(n.z) ? n.z : Number.isFinite(n?.pos?.z) ? n.pos.z : null;
+                    if (x == null || y == null || z == null) continue;
+                    points.push([Math.floor(x), Math.floor(y), Math.floor(z)]);
+                }
+                const last = path[path.length - 1];
+                if (last && points.length > 0) {
+                    const lx = Number.isFinite(last.x) ? last.x : Number.isFinite(last?.pos?.x) ? last.pos.x : null;
+                    const ly = Number.isFinite(last.y) ? last.y : Number.isFinite(last?.pos?.y) ? last.pos.y : null;
+                    const lz = Number.isFinite(last.z) ? last.z : Number.isFinite(last?.pos?.z) ? last.pos.z : null;
+                    if (lx != null && ly != null && lz != null) {
+                        const tail = [Math.floor(lx), Math.floor(ly), Math.floor(lz)];
+                        const curTail = points[points.length - 1];
+                        if (!curTail || curTail[0] !== tail[0] || curTail[1] !== tail[1] || curTail[2] !== tail[2]) {
+                            points.push(tail);
+                        }
+                    }
+                }
+                if (points.length > 1) debugWS.broadcast('path', { botId, points });
+            } catch (_) {}
+        });
     }
 
     // Only register event handlers ONCE to prevent accumulation on respawn
@@ -4260,6 +4306,74 @@ async function processActionQueue() {
                     // fully-qualified form. Strip the namespace prefix before comparing.
                     const _normDim = d => (d ? d.replace(/^[^:]+:/, '') : null);
 
+                    // ── Jetpack follow state ──────────────────────────────────────────
+                    // Inline jetpack state machine — never calls flyWithJetpack() which
+                    // would force a Phase-3 landing and cause fly→land→stop loops.
+                    //
+                    //   IDLE   → pathfinder drives movement (GoalNear)
+                    //   ACTIVE → physicsTick PID controls vertical; lookAt+forward/sprint
+                    //            controls horizontal; pathfinder is paused
+                    //
+                    // IDLE→ACTIVE : dy >= 8 AND jetpack equipped AND fuel > critical
+                    // ACTIVE→IDLE : bot.entity.onGround AND dy < 5
+                    //               (never stop mid-air to avoid fall-damage loops)
+                    //
+                    // _jTargetY is written each interval tick so the physicsTick PID
+                    // always tracks the player's current altitude, not a snapshot.
+                    let _jActive  = false;
+                    let _jConfig  = null;
+                    let _jFlyTick = null;
+                    let _jTargetY = null;   // updated every 700 ms from live p.y
+
+                    function _jStart(config) {
+                        if (_jActive) return;
+                        _jConfig  = config;
+                        _jActive  = true;
+                        bot.pathfinder.setGoal(null);   // hand off to manual control
+                        _setServerFlyingFlag(true);
+                        if (config.activateMethod === 'right_click') {
+                            try { bot.activateItem(); } catch (_) {}
+                        }
+                        bot.setControlState('jump',    true);
+                        bot.setControlState('sneak',   false);
+                        bot.setControlState('forward', true);
+                        bot.setControlState('sprint',  true);
+                        _jFlyTick = () => {
+                            if (_jTargetY === null) return;
+                            const diff = _jTargetY - bot.entity.position.y;
+                            if (diff > 0.5) {
+                                // Ascending: proportional thrust, capped at max
+                                bot.entity.velocity.y = Math.min(0.28, diff * 0.15 + 0.06);
+                            } else if (diff < -1.5) {
+                                // Overshot: let gravity descend but cap speed
+                                bot.entity.velocity.y = Math.max(-0.12, bot.entity.velocity.y);
+                            } else {
+                                // At target altitude: hover (fight gravity ≈ 0.08/tick)
+                                bot.entity.velocity.y = 0.06;
+                            }
+                        };
+                        bot.on('physicsTick', _jFlyTick);
+                    }
+
+                    function _jStop() {
+                        if (!_jActive) return;
+                        _jActive  = false;
+                        _jTargetY = null;
+                        if (_jFlyTick) {
+                            bot.removeListener('physicsTick', _jFlyTick);
+                            _jFlyTick = null;
+                        }
+                        bot.setControlState('jump',    false);
+                        bot.setControlState('forward', false);
+                        bot.setControlState('sprint',  false);
+                        bot.setControlState('sneak',   false);
+                        _setServerFlyingFlag(false);
+                        if (_jConfig && _jConfig.activateMethod === 'right_click') {
+                            try { bot.activateItem(); } catch (_) {}
+                        }
+                        _jConfig = null;
+                    }
+
                     await new Promise(resolve => {
                         let lastKnown = tracked ? { ...tracked } : null;
                         let lastSeenAt = tracked ? Date.now() : 0;
@@ -4267,6 +4381,7 @@ async function processActionQueue() {
                         const check = setInterval(async () => {
                             if (currentCancelToken.cancelled) {
                                 clearInterval(check);
+                                _jStop();
                                 bot.pathfinder.setGoal(null);
                                 resolve();
                                 return;
@@ -4309,6 +4424,7 @@ async function processActionQueue() {
                                 if (!missingSince) missingSince = Date.now();
                                 if (Date.now() - missingSince < 15000) return; // 15s grace
                                 clearInterval(check);
+                                _jStop();
                                 bot.pathfinder.setGoal(null);
                                 bot.chat(`[System Error] Lost sight of ${action.target}.`);
                                 process.send({ type: 'USER_CHAT', data: { username: "System", message: `Lost sight of ${action.target}.`, environment: getEnvironmentContext() } });
@@ -4321,6 +4437,7 @@ async function processActionQueue() {
                             const tgtDim = _normDim(p.dimension);
                             if (botDim && tgtDim && botDim !== tgtDim) {
                                 clearInterval(check);
+                                _jStop();
                                 bot.pathfinder.setGoal(null);
                                 bot.chat(`[System] ${action.target} is in ${tgtDim}, bot is in ${botDim}. Come finished.`);
                                 process.send({ type: 'USER_CHAT', data: { username: "System", message: `${action.target} is in a different dimension. Come finished.`, environment: getEnvironmentContext() } });
@@ -4328,10 +4445,52 @@ async function processActionQueue() {
                                 return;
                             }
 
-                            // Bridge check when gap is ahead
                             const dx = p.x - bot.entity.position.x;
+                            const dy = p.y - bot.entity.position.y;
                             const dz = p.z - bot.entity.position.z;
                             const dist = Math.hypot(dx, dz);
+
+                            // ── Jetpack state machine ─────────────────────────────────
+                            // Always refresh the PID target so _jFlyTick never chases
+                            // a stale snapshot.
+                            if (_jActive) _jTargetY = p.y;
+
+                            // ACTIVE→IDLE: close enough in all axes — stop thrust and
+                            // let the bot descend under gravity.  Do NOT require onGround:
+                            // the PID hover (vy=0.06) fights gravity so the bot never
+                            // lands if we wait for onGround.
+                            // Hold sneak=true so the jetpack mod's fall-protection
+                            // engages server-side (most mods prevent fall damage while
+                            // sneaking or while jump=true; we clear jump in _jStop).
+                            if (_jActive && dy < 5 && dist < 4) {
+                                _jStop();
+                                bot.setControlState('sneak', true); // safe descent
+                            }
+
+                            // IDLE→ACTIVE: player significantly above bot
+                            if (!_jActive && dy >= 8) {
+                                const torsoItem = bot.inventory.slots[bot.getEquipmentDestSlot('torso')];
+                                const aviation = detectAviationMethod(torsoItem);
+                                if (aviation && aviation.type === 'jetpack') {
+                                    const fuel = getJetpackFuelRatio(torsoItem, aviation.config);
+                                    const fuelCritical = aviation.config.fuelCritical ?? 0.05;
+                                    if (fuel > fuelCritical) {
+                                        _jStart(aviation.config);
+                                    }
+                                }
+                            }
+
+                            // While jetpack is active: steer horizontally via lookAt.
+                            // forward+sprint are set in _jStart; physicsTick handles
+                            // vertical.  Pathfinder is paused (setGoal(null) in _jStart).
+                            if (_jActive) {
+                                if (dist > 2) {
+                                    try { await bot.lookAt(new Vec3(p.x, bot.entity.position.y, p.z), true); } catch (_) {}
+                                }
+                                return;
+                            }
+
+                            // ── Ground follow (jetpack inactive) ─────────────────────
                             if (dist > 2.5) {
                                 const af = Math.atan2(dz, dx);
                                 if (!isSafeForward(af) && (hasForwardGap(af) || hasLikelyBridgeNeed(af))) {
@@ -4339,7 +4498,6 @@ async function processActionQueue() {
                                 }
                             }
 
-                            // Always update goal to latest server-authoritative position
                             bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, 3), true);
                         }, 700);
                     });
@@ -4472,17 +4630,19 @@ async function processActionQueue() {
                     }
                 }
 
-                // ── Jetpack auto-promotion for long-distance goto ─────────────────────
-                // If a jetpack is equipped with sufficient fuel AND the destination is
-                // farther than JETPACK_GOTO_MIN_DIST blocks, switch to fly action.
-                // This allows the LLM to issue a plain "goto" and the bot will
-                // automatically choose the most efficient transport method.
+                // ── Jetpack auto-promotion for long-distance or high-altitude goto ──
+                // Triggers when: XZ distance >= 80 blocks  OR  destination Y is >= 30
+                // blocks above current position.  This covers both long horizontal
+                // travel AND cases where the target is simply much higher (e.g., a
+                // player on a sky platform 40 blocks up but only 20 blocks away XZ).
                 // Skipped when: action._noJetpack is set (prevents infinite loops),
                 // destination is same dimension portal, or jetpack has low fuel.
                 const JETPACK_GOTO_MIN_DIST = 80; // blocks XZ
+                const JETPACK_GOTO_MIN_DY   = 30; // blocks vertical rise
                 if (!action._noJetpack && destX !== undefined && destZ !== undefined && bot.entity) {
                     const _jXZDist = Math.hypot(destX - bot.entity.position.x, destZ - bot.entity.position.z);
-                    if (_jXZDist >= JETPACK_GOTO_MIN_DIST) {
+                    const _jDY = (destY !== undefined ? destY : bot.entity.position.y) - bot.entity.position.y;
+                    if (_jXZDist >= JETPACK_GOTO_MIN_DIST || _jDY >= JETPACK_GOTO_MIN_DY) {
                         const _jTorsoIdx = bot.getEquipmentDestSlot('torso');
                         const _jTorsoItem = bot.inventory.slots[_jTorsoIdx];
                         const _jAviation  = detectAviationMethod(_jTorsoItem);
@@ -4858,6 +5018,33 @@ async function processActionQueue() {
                                 bot.pathfinder.setGoal(new goals.GoalXZ(_sw.x, _sw.z), true);
 
                             } else {
+                                // Severe: first try jetpack if destination is higher and
+                                // a jetpack is equipped — covers the common "hollow below
+                                // hill" scenario where ground pathing enters a cave at the
+                                // correct XZ but can never reach the target Y.
+                                const _yGap = destY !== undefined ? (destY - bot.entity.position.y) : 0;
+                                if (_yGap >= 8 && _stuckCount === 5) { // try once at count=5
+                                    const _escIdx  = bot.getEquipmentDestSlot('torso');
+                                    const _escItem = bot.inventory.slots[_escIdx];
+                                    const _escAv   = detectAviationMethod(_escItem);
+                                    if (_escAv && _escAv.type === 'jetpack') {
+                                        const _escFuel = getJetpackFuelRatio(_escItem, _escAv.config);
+                                        if (_escFuel > (_escAv.config.fuelCritical ?? 0.05)) {
+                                            bot.chat('[System] Stuck below target elevation — using jetpack to climb over obstacle.');
+                                            try {
+                                                await flyWithJetpack(destX, destY + 2, destZ, _escAv.config, currentCancelToken);
+                                            } catch (_e) {}
+                                            _stLastPos  = bot.entity.position.clone();
+                                            _stLastTime = Date.now();
+                                            _stuckCount = 0;
+                                            _sw = _computeNextStreamWp(bot.entity.position.x, bot.entity.position.z);
+                                            if (!_sw) break;
+                                            bot.pathfinder.setGoal(new goals.GoalXZ(_sw.x, _sw.z), true);
+                                            continue;
+                                        }
+                                    }
+                                }
+
                                 // Severe: force-walk only if safe ahead (no lava/cliff)
                                 const af = Math.atan2(rdz, rdx);
                                 if (isSafeForward(af)) {

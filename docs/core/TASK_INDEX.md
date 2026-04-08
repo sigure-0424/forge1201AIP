@@ -3,6 +3,12 @@
 ## Active
 
 ## Completed
+- BUGFIX-20260409-002-come-landing-goto-hollow-escape: Remove onGround from come ACTIVE→IDLE (PID hover deadlock causes permanent airborne), add goto severe-stuck jetpack escape for hollow-below-hill terrain obstacles
+- BUGFIX-20260409-001-come-fall-goto-jetpack-llm-portal: Fix come jetpack bounce-fall loop (PID+onGround), goto vertical jetpack promotion (dy>=30), LLM portal misfire guard after goto failure
+- BUGFIX-20260408-005-come-jetpack-follow-redesign: Replace flyWithJetpack() delegation with inline _jActive state machine in come interval; physicsTick hook for constant vertical thrust; no landing phase; dy-driven IDLE/ACTIVE transitions
+- BUGFIX-20260408-004-come-jetpack-follow-deadlock: Prevent come follow stalls after jetpack assist by skipping setGoal during aerial busy state, widening vertical-assist trigger, and using GoalXZ for large Y gaps
+- BUGFIX-20260408-003-follow-jetpack-descent-path-detail: Add path_update detailed route broadcasting and guard stale/over-eager come jetpack ascents
+- BUGFIX-20260408-002-follow-vertical-path-overlay: Fix airborne follow Y convergence with jetpack assist and restore path overlay by broadcasting setGoal paths
 - BUGFIX-20260406-002-auxmod-minimal-player-telemetry: Simplify aux-mod entity update payload to playerName/dimension/position only (no viewport-derived data)
 - BUGFIX-20260406-001-follow-visibility-flight-intent: Harden come/follow out-of-view continuity and normalize jetpack/elytra flight intent to fly action
 - TASK-20260404-002-knowledge-ui-ops: Add WebUI knowledge operations (crawl status + local search), run crawl continuation, and validate with npm test
