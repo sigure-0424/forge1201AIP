@@ -15,7 +15,7 @@
 #      例: SERVER_DIR=E:/forge1201server
 #
 # ポート:
-#   25565  Minecraft サーバー (ホスト公開)
+#   25566  Minecraft サーバー (Docker内部ネットワーク)
 #   3000   Bot WebUI (ホスト公開)
 #   3001   Debug WebSocket (ホスト内のみ)
 # ─────────────────────────────────────────────────────────────
@@ -29,6 +29,7 @@ services:
     restart: unless-stopped
     tty: true
     stdin_open: true
+    entrypoint: ["/bin/sh", "-lc", "if [ \"$${RESET_WORLD_ON_BOOT:-1}\" = \"1\" ]; then echo '[forge-server] RESET_WORLD_ON_BOOT=1 -> wiping /data/world and dimension folders'; rm -rf /data/world /data/world_nether /data/world_the_end /data/dimensions; fi; exec /start"]
     environment:
       # Forge 自動インストール
       EULA: "TRUE"
@@ -42,18 +43,17 @@ services:
       ONLINE_MODE: "false"
       # ウォッチドッグ・クラッシュ対策
       MAX_TICK_TIME: "-1"
+      RESET_WORLD_ON_BOOT: ${RESET_WORLD_ON_BOOT:-1}
       # ForgeAIP aux_mod がレジストリを書き出すパス
       # コンテナ内 /data が SERVER_DIR にマウントされる
     volumes:
       # SERVER_DIR をコンテナの /data にマウント
       # (既存サーバーデータを再利用。mods/ config/ も含まれる)
-      - ${SERVER_DIR:-../../..}/forge1201server:/data
-    ports:
-      - "25565:25565"
+      - ${SERVER_DIR:-E:/forge1201server}:/data
     networks:
       - forgeaip-net
     healthcheck:
-      test: ["CMD", "mc-health"]
+      test: ["CMD-SHELL", "grep -Eqi ':(63DD|63DE)' /proc/net/tcp /proc/net/tcp6"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -72,7 +72,7 @@ services:
     environment:
       # Minecraft サーバーへの接続先 (Docker 内部ネットワーク名を使用)
       MC_HOST: forge-server
-      MC_PORT: "25565"
+      MC_PORT: "25566"
       # LLM エンドポイント (ホスト側 Ollama など)
       OLLAMA_URL: ${OLLAMA_URL}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-gpt-oss:20b-cloud}
@@ -87,7 +87,7 @@ services:
       OBS_WS_PASSWORD: ${OBS_WS_PASSWORD:-}
     volumes:
       # サーバーディレクトリを読み取り専用でマウント (forgeaip_registry.json 取得用)
-      - ${SERVER_DIR:-../../..}/forge1201server:/mc-server:ro
+      - ${SERVER_DIR:-E:/forge1201server}:/mc-server:ro
       # ログ・デバッグファイルをホストに出力
       - ../../debug_trace.jsonl:/app/debug_trace.jsonl
       - ../../data:/app/data

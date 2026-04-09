@@ -47,5 +47,26 @@
     "y": 10,
     "z": 838,
     "dimension": "the_end"
+  },
+  {
+    "name": "Waypoint Bridge",
+    "x": -95,
+    "y": 64,
+    "z": -100,
+    "dimension": "overworld"
+  },
+  {
+    "name": "迷路ゾーン",
+    "x": -94,
+    "y": 66,
+    "z": -100,
+    "dimension": "overworld"
+  },
+  {
+    "name": "ocean_monument",
+    "x": 184,
+    "y": 58,
+    "z": 64,
+    "dimension": "overworld"
   }
 ]

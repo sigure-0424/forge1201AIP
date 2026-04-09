@@ -49,6 +49,17 @@ process.on('uncaughtException', (err) => {
         console.log(`[Actuator] Suppressed known mod compatibility exception: ${err.message}`);
         return;
     }
+    // Forge/modpack chat payloads can violate minecraft-protocol assumptions
+    // and throw from client/chat.js when reading player message signatures.
+    // Treat this as non-fatal to keep the bot connected and operational.
+    if (err.message && err.message.includes("Cannot read properties of undefined (reading '0')")
+        && String(err.stack || '').includes('minecraft-protocol/src/client/chat.js')) {
+        const head = String(err.stack || '').split('\n').slice(0, 4).join(' | ');
+        console.log(`[Actuator] Suppressed chat parser compatibility exception: ${err.message}`);
+        console.log(`[Actuator] Chat parser stack head: ${head}`);
+        try { hardenClientChatParsers(); } catch (_) {}
+        return;
+    }
     console.error(`[Actuator] CRITICAL UNCAUGHT EXCEPTION: ${err.message}`);
     console.error(err.stack);
     process.send({ type: 'ERROR', category: 'BotError', details: err.message });
@@ -68,8 +79,10 @@ try {
     const mcDataGlobal = require('minecraft-data')('1.20.1');
     const types = mcDataGlobal.protocol.play.toClient.types;
     // Suppress partial packet read exceptions by ignoring packets known to desync (like world_particles with custom Forge particle types).
-    const bypass = ['declare_recipes', 'tags', 'advancements', 'declare_commands', 'unlock_recipes', 'craft_recipe_response', 'nbt_query_response', 'world_particles'];
-    bypass.forEach(p => {
+    const bypass = ['declare_recipes', 'tags', 'advancements', 'declare_commands', 'unlock_recipes', 'craft_recipe_response', 'nbt_query_response', 'world_particles', 'player_chat', 'system_chat'];
+    const dynamicChatBypass = Object.keys(types).filter(name => /(^|_)chat($|_)/i.test(name));
+    const bypassAll = Array.from(new Set([...bypass, ...dynamicChatBypass]));
+    bypassAll.forEach(p => {
         types[p] = 'restBuffer';
         if (types['packet_' + p]) types['packet_' + p] = 'restBuffer';
     });
@@ -92,6 +105,49 @@ const bot = mineflayer.createBot({
     hideErrors: true
 });
 
+function hardenClientChatParsers() {
+    const client = bot && bot._client;
+    if (!client) return;
+
+    if (!client.__forgeAipEmitPatchApplied) {
+        const blockedEvents = new Set([
+            'declare_commands',
+            'player_chat',
+            'system_chat',
+            'profileless_chat',
+            'disguised_chat'
+        ]);
+        const originalEmit = client.emit;
+        client.emit = function patchedEmit(eventName, ...args) {
+            if (blockedEvents.has(eventName)) return false;
+            return originalEmit.call(this, eventName, ...args);
+        };
+        client.__forgeAipEmitPatchApplied = true;
+    }
+
+    // Some Forge/modded servers send chat payload variants that crash
+    // minecraft-protocol's default chat listeners before spawn completes.
+    // Keep outgoing chat working, but replace fragile inbound listeners.
+    const fragileChatEvents = [
+        'player_chat',
+        'system_chat',
+        'profileless_chat',
+        'disguised_chat',
+        'declare_commands'
+    ];
+
+    for (const ev of fragileChatEvents) {
+        try {
+            client.removeAllListeners(ev);
+            client.on(ev, () => {});
+        } catch (_) {}
+    }
+}
+
+// Apply immediately and once again after inject_allowed to guard against
+// delayed listener attachment by protocol plugins.
+hardenClientChatParsers();
+
 // Issue 6: Ignore errors from unverified mods to maintain robustness
 bot.on('error', (err) => {
     if (err && err.message && (err.message.includes('unknown') || err.message.includes('unverified'))) {
@@ -105,6 +161,7 @@ const mcData = require('minecraft-data')(bot.version);
 
 bot.on('inject_allowed', () => {
     console.log('[Actuator] Connection allowed. Starting handshake machine...');
+    hardenClientChatParsers();
     const handshake = new ForgeHandshakeStateMachine(bot._client);
     handshake.on('handshake_complete', (registrySyncBuffer) => {
         console.log('[Actuator] Handshake complete. Processing registries via Vanilla-First Mode...');
@@ -155,7 +212,15 @@ let _serverPosCount = 0;
 let _lastServerPosCheck = Date.now();
 let _frozenPosKey = null;
 let _frozenPeriods = 0;
+let _loggedPreReadyPosition = false;
 bot._client.on('position', (packet) => {
+    if (!_loggedPreReadyPosition && !_botReady) {
+        _loggedPreReadyPosition = true;
+        console.log(`[Actuator] First position packet before ready: (${packet.x}, ${packet.y}, ${packet.z}) entity=${!!bot.entity}`);
+    }
+    if (!_botReady && bot.entity) {
+        flushPendingIpcActions('first-position-packet');
+    }
     _serverPosCount++;
     const now = Date.now();
     if (now - _lastServerPosCheck > 10000) {
@@ -229,6 +294,55 @@ let _treeDir = null; // { dx, dz } unit vector, or null if unknown
 // Actions arriving before bot is ready are buffered and flushed after spawn.
 let _botReady = false;
 let _pendingIpcActions = [];
+function ensureFallbackMovementInit(source) {
+    if (movements) return true;
+    try {
+        if (!bot.entity) return false;
+        movements = new Movements(bot, mcData);
+        movements.canDig = true;
+        movements.allowSprinting = false;
+        movements.liquidCost = 3;
+        movements.allow1by1towers = true;
+        movements.maxDropDown = 1;
+        if ('allowParkour' in movements) movements.allowParkour = false;
+        movements.scafoldingBlocks = [
+            bot.registry.blocksByName.dirt?.id,
+            bot.registry.blocksByName.cobblestone?.id,
+            bot.registry.blocksByName.netherrack?.id,
+            bot.registry.blocksByName.sand?.id
+        ].filter(id => id !== undefined);
+        bot.pathfinder.setMovements(movements);
+        console.log(`[Actuator] Fallback movement init completed via ${source}.`);
+        return true;
+    } catch (e) {
+        console.log(`[Actuator] Fallback movement init failed via ${source}: ${e.message}`);
+        return false;
+    }
+}
+
+function flushPendingIpcActions(reason) {
+    if (_botReady) return;
+    if (!ensureFallbackMovementInit(reason)) return;
+    _botReady = true;
+    console.log(`[Actuator] Bot marked ready via ${reason}. Flushing pending IPC actions: ${_pendingIpcActions.length}`);
+    for (const pending of _pendingIpcActions) {
+        actionQueue.push(...pending);
+    }
+    _pendingIpcActions = [];
+    if (actionQueue.length > 0 && !isExecuting) processActionQueue();
+}
+
+bot.on('login', () => {
+    // On some modded servers spawn semantics can be delayed or altered.
+    // If an entity exists shortly after login, release buffered IPC actions.
+    setTimeout(() => {
+        if (_botReady || !bot.entity || !bot.entity.position) return;
+        const pos = bot.entity.position;
+        const hasMeaningfulPos = Math.abs(pos.x) + Math.abs(pos.y) + Math.abs(pos.z) > 0;
+        if (hasMeaningfulPos) flushPendingIpcActions('login-timeout');
+    }, 7000);
+});
+
 // Latest external player snapshots relayed from /api/entity_updates via parent IPC.
 // Used as a fallback when target entities are temporarily out of render range.
 const _externalPlayerPositions = new Map(); // playerName -> { x, y, z, dimension, updatedAt }
@@ -964,12 +1078,7 @@ bot.on('spawn', async () => {
 
     // ── Mark bot ready EARLY so test harness can start, then escape water in background ──
     bot.chat('[System] Forge AI Player Ready.');
-    _botReady = true;
-    console.log('[Actuator] Bot ready. Flushing pending IPC actions:', _pendingIpcActions.length);
-    for (const pending of _pendingIpcActions) {
-        actionQueue.push(...pending);
-    }
-    _pendingIpcActions = [];
+    flushPendingIpcActions('spawn');
 
     // Bug Fix 10: Restore checkpoint — if the bot restarted after a crash/disconnect
     // and there are no buffered IPC actions (no new instructions yet), attempt to
@@ -983,8 +1092,6 @@ bot.on('spawn', async () => {
             _clearQueueCheckpoint();
         }
     }
-
-    if (actionQueue.length > 0) processActionQueue();
 
     // Death Recovery: check for gravestone mod death-marker item in inventory.
     // If present, recovery is incomplete regardless of how many restarts have occurred.
@@ -1561,6 +1668,19 @@ bot.on('chat', (username, message) => {
     // system logs (e.g. difficulty changes) from accidentally triggering the AI.
     if (!message.startsWith('-')) return;
 
+    const directGoto = message.slice(1).trim().match(/^goto\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)$/i);
+    if (directGoto && bot.entity) {
+        const x = parseChatCoordToken(directGoto[1], bot.entity.position.x);
+        const y = parseChatCoordToken(directGoto[2], bot.entity.position.y);
+        const z = parseChatCoordToken(directGoto[3], bot.entity.position.z);
+        if (x == null || y == null || z == null) {
+            bot.chat('[System] Invalid -goto coordinates. Use: -goto x y z');
+            return;
+        }
+        enqueueDirectAction({ action: 'goto', x, y, z, timeout: 120000 });
+        return;
+    }
+
     const key = `${username}:${message}`;
     const now = Date.now();
     if (now - (_chatDedup.get(key) ?? 0) < 3000) return;
@@ -1625,6 +1745,30 @@ function saveWaypoints(waypoints) {
 function findWaypoint(name) {
     const waypoints = loadWaypoints();
     return waypoints.find(w => w.name.toLowerCase() === name.toLowerCase()) || null;
+}
+
+function parseChatCoordToken(token, currentValue) {
+    const t = String(token || '').trim();
+    if (!t) return null;
+    if (t === '~') return currentValue;
+    if (t.startsWith('~')) {
+        const rel = Number(t.slice(1) || '0');
+        if (!Number.isFinite(rel)) return null;
+        return currentValue + rel;
+    }
+    const abs = Number(t);
+    if (!Number.isFinite(abs)) return null;
+    return abs;
+}
+
+function enqueueDirectAction(action) {
+    if (!_botReady) {
+        _pendingIpcActions.push([action]);
+        return;
+    }
+    _inStopMode = false;
+    actionQueue.push(action);
+    if (!isExecuting) processActionQueue();
 }
 
 // ─── Path Cache System ─────────────────────────────────────────────────────

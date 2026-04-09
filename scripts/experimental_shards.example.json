@@ -1,0 +1,29 @@
+{
+  "shards": [
+    {
+      "name": "stack-a",
+      "baseUrl": "http://localhost:3000",
+      "botId": "AI_Bot_01",
+      "mode": "chat",
+      "cases": [
+        "z1-bridge-move",
+        "z3-break-minimal",
+        "z5-initial-material-only",
+        "z7-durability-minimal",
+        "z9-combat-capability"
+      ]
+    },
+    {
+      "name": "stack-b",
+      "baseUrl": "http://localhost:3100",
+      "botId": "AI_Bot_01",
+      "mode": "chat",
+      "cases": [
+        "z2-maze-move",
+        "z4-itemrange-minimal",
+        "z6-craft-no-prestock",
+        "z8-flight-capability"
+      ]
+    }
+  ]
+}

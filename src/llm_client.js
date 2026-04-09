@@ -2,6 +2,16 @@
 require('dotenv').config();
 const fs = require('fs');
 
+function isDockerRuntime() {
+    try { return fs.existsSync('/.dockerenv'); } catch (_) { return false; }
+}
+
+function remapDockerLocalhost(url) {
+    if (!url) return '';
+    if (!/localhost|127\.0\.0\.1/.test(url)) return '';
+    return url.replace(/localhost|127\.0\.0\.1/g, 'host.docker.internal');
+}
+
 // In WSL2, 'localhost' / '127.0.0.1' resolves inside the Linux VM — not Windows.
 // If Ollama is running on the Windows host, replace localhost with the WSL2
 // default-gateway IP, which is the Windows host on the virtual network.
@@ -31,6 +41,7 @@ class LLMClient {
     constructor(model = process.env.OLLAMA_MODEL || 'gpt-oss:20b-cloud', url = process.env.OLLAMA_URL || 'http://localhost:11434/api/generate') {
         this.model = model;
         this.url = url; // Use URL exactly as provided, bypassing WSL remapping per user request
+        this.lastError = '';
         console.log(`[LLMClient] Endpoint: ${this.url}  Model: ${this.model}`);
     }
 
@@ -122,6 +133,7 @@ class LLMClient {
     }
 
     async generateAction(prompt) {
+        this.lastError = '';
         try {
             const headers = { 'Content-Type': 'application/json' };
             // Strip BOM, control chars, and surrounding whitespace — invisible
@@ -139,20 +151,53 @@ class LLMClient {
                 console.log(`[LLMClient] Auth: ${authScheme || '<no prefix>'} ${apiKey.substring(0, 8)}...`);
             }
 
+            const timeoutMsRaw = Number(process.env.OLLAMA_TIMEOUT_MS || 45000);
+            const timeoutMs = Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0 ? timeoutMsRaw : 45000;
+            const makeRequest = async (url) => {
+                const ctrl = new AbortController();
+                const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+                try {
+                    return await fetch(url, {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify({
+                            model: this.model,
+                            prompt: prompt,
+                            stream: false,
+                            format: 'json'
+                        }),
+                        signal: ctrl.signal,
+                    });
+                } finally {
+                    clearTimeout(timer);
+                }
+            };
+
             let response;
             try {
-                response = await fetch(this.url, {
-                    method: 'POST',
-                    headers,
-                    body: JSON.stringify({
-                        model: this.model,
-                        prompt: prompt,
-                        stream: false,
-                        format: 'json'
-                    })
-                });
+                response = await makeRequest(this.url);
             } catch (netErr) {
-                throw new Error(`Cannot reach LLM at ${this.url} — ${netErr.message}. Check OLLAMA_URL in .env.`);
+                if (netErr && netErr.name === 'AbortError') {
+                    throw new Error(`LLM request timed out after ${timeoutMs}ms at ${this.url}.`);
+                }
+
+                const dockerFallback = isDockerRuntime() ? remapDockerLocalhost(this.url) : '';
+                if (dockerFallback) {
+                    console.warn(`[LLMClient] Primary endpoint unreachable in Docker. Retrying via ${dockerFallback}`);
+                    try {
+                        response = await makeRequest(dockerFallback);
+                        this.url = dockerFallback;
+                        process.env.OLLAMA_URL = dockerFallback;
+                        console.log(`[LLMClient] Switched endpoint to ${dockerFallback}`);
+                    } catch (fallbackErr) {
+                        if (fallbackErr && fallbackErr.name === 'AbortError') {
+                            throw new Error(`LLM fallback request timed out after ${timeoutMs}ms at ${dockerFallback}.`);
+                        }
+                        throw new Error(`Cannot reach LLM at ${this.url} (fallback ${dockerFallback} also failed: ${fallbackErr.message}). Check OLLAMA_URL in .env.`);
+                    }
+                } else {
+                    throw new Error(`Cannot reach LLM at ${this.url} — ${netErr.message}. Check OLLAMA_URL in .env.`);
+                }
             }
 
             if (!response.ok) {
@@ -170,7 +215,8 @@ class LLMClient {
             const data = await response.json();
 
             if (data.error) {
-                console.error(`[LLMClient] API error: ${data.error}`);
+                this.lastError = `API error: ${data.error}`;
+                console.error(`[LLMClient] ${this.lastError}`);
                 return null;
             }
 
@@ -184,7 +230,8 @@ class LLMClient {
             return parsedResponse;
 
         } catch (err) {
-            console.error("[LLMClient] Failed to generate action:", err.message);
+            this.lastError = err && err.message ? err.message : String(err);
+            console.error("[LLMClient] Failed to generate action:", this.lastError);
             return null;
         }
     }

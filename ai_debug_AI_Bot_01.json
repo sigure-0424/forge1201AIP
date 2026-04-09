@@ -1,53 +1,37 @@
 {
-  "timestamp": "2026-04-08T18:07:24.040Z",
+  "timestamp": "2026-04-09T08:26:00.035Z",
   "ready": true,
   "position": {
-    "x": 5.7,
-    "y": 84,
-    "z": 86.5
+    "x": -87.7,
+    "y": 55.3,
+    "z": -104.3
   },
-  "health": 19,
-  "food": 19,
+  "health": 2,
+  "food": 17,
   "dimension": "overworld",
-  "isExecuting": true,
-  "currentAction": "goto",
+  "isExecuting": false,
+  "currentAction": null,
   "actionQueue": [],
   "treeDir": null,
   "inventory": [
     {
-      "name": "gravestone:obituary",
+      "name": "waystones:gray_sharestone",
       "count": 1
     },
     {
-      "name": "netherite_sword",
+      "name": "create:potato_recovery",
       "count": 1
     },
     {
-      "name": "bone",
-      "count": 2
-    },
-    {
-      "name": "bow",
-      "count": 1
-    },
-    {
-      "name": "wheat_seeds",
-      "count": 1
-    },
-    {
-      "name": "rotten_flesh",
-      "count": 3
-    },
-    {
-      "name": "create:steam_whistle_extension",
-      "count": 1
+      "name": "createbigcannons:molten_bronze",
+      "count": 7
     }
   ],
   "armor": {
     "head": null,
-    "torso": "create_jetpack:jetpack",
+    "torso": null,
     "legs": null,
     "feet": null,
-    "hand": "netherite_sword"
+    "hand": "waystones:gray_sharestone"
   }
 }

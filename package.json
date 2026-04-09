@@ -12,7 +12,9 @@
     "test:e2e": "node tests/test_e2e_integration.js",
     "build:mod-index": "node scripts/build_mod_knowledge_index.js",
     "crawl:wikis": "node scripts/run_crawl_wikis.js",
-    "test:runner": "node tests/run_tests.js"
+    "test:runner": "node tests/run_tests.js",
+    "test:experimental": "node scripts/run_experimental_instruction_suite.js --mode chat --output results/experimental_instruction_suite.json",
+    "test:experimental:parallel": "node scripts/run_experimental_instruction_suite.js --mode chat --shard-config scripts/experimental_shards.example.json --output results/experimental_instruction_suite_parallel.json"
   },
   "repository": {
     "type": "git",

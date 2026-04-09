@@ -899,13 +899,24 @@ Storage MOD remote access:     send_custom_payload (channel from wiki)
 
         let action = await this.llm.generateAction(prompt);
 
-        // LLM unreachable or returned an API error — stay silent, do not send anything to the bot.
+        // LLM unreachable or returned an API error. Surface a concise system reason
+        // so silent failures do not look like ignored instructions.
         // Guard: only release the lock if this thought still owns it; a newer user message
         // may have already overwritten the thoughtId while the request was in flight.
         if (action === null) {
             if (this.activeLlmRequests.get(botId) === thoughtId) {
                 this.activeLlmRequests.delete(botId);
             }
+            const botProcess = this.bots.get(botId);
+            const errMsg = String(this.llm?.lastError || 'LLM did not return a valid JSON action').trim();
+            if (botProcess) {
+                safeBotProcessSend(botProcess, {
+                    type: 'EXECUTE_ACTION',
+                    action: [{ action: 'chat', message: `[System] LLM unavailable: ${errMsg}` }],
+                    queue_op: 'replace'
+                });
+            }
+            this._appendChatLog(botId, 'System', `[LLM] ${errMsg}`);
             this.processNextQueueItem(botId);
             return;
         }

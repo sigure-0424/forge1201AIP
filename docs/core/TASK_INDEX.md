@@ -1,8 +1,10 @@
 # TASK_INDEX
 
 ## Active
+- TASK-20260409-004-experimental-world-exhaustive-validation: Execute full zone-by-zone E2E validation in generated experimental world via direct action API and collect evidence
 
 ## Completed
+- TASK-20260409-003-test-world-auto-generation: Add automated 9-zone test world generator from forgeaip_registry.json, clean-world Docker boot path, queued direct -goto parsing, and integration validation with Forge+bot containers
 - BUGFIX-20260409-002-come-landing-goto-hollow-escape: Remove onGround from come ACTIVE→IDLE (PID hover deadlock causes permanent airborne), add goto severe-stuck jetpack escape for hollow-below-hill terrain obstacles
 - BUGFIX-20260409-001-come-fall-goto-jetpack-llm-portal: Fix come jetpack bounce-fall loop (PID+onGround), goto vertical jetpack promotion (dy>=30), LLM portal misfire guard after goto failure
 - BUGFIX-20260408-005-come-jetpack-follow-redesign: Replace flyWithJetpack() delegation with inline _jActive state machine in come interval; physicsTick hook for constant vertical thrust; no landing phase; dy-driven IDLE/ACTIVE transitions

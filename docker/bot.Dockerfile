@@ -5,7 +5,7 @@
 #       単独で起動する場合は docker build -f docker/bot.Dockerfile . -t forgeaip-bot
 # ─────────────────────────────────────────────────────────────
 
-FROM node:18-slim
+FROM node:22-slim
 
 WORKDIR /app
 
