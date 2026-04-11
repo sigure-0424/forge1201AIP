@@ -6771,6 +6771,10 @@ async function processActionQueue() {
                 const findPortalAll = () => portalBlockId !== undefined
                     ? bot.findBlock({ matching: portalBlockId, maxDistance: 64 })
                     : null;
+                // Find multiple portal blocks to determine the cluster center for accurate entry.
+                const findPortalCluster = () => portalBlockId !== undefined
+                    ? bot.findBlocks({ matching: portalBlockId, maxDistance: 8, count: 20 })
+                    : [];
 
                 // Yield to the event loop before the synchronous findBlock scan.
                 // findBlock iterates millions of blocks; without this yield, any pending
@@ -6778,12 +6782,19 @@ async function processActionQueue() {
                 await new Promise(resolve => setImmediate(resolve));
 
                 let portalBlock = findPortalAll();
+                // Remember the current dimension before any travel so we can tag the waypoint correctly.
+                const originDim = bot.game.dimension.replace('minecraft:', '');
 
                 // Step via a known portal waypoint (name must contain 'portal' or 'gate')
+                // Only consider waypoints in the CURRENT dimension to avoid navigating to
+                // overworld coordinates while in the Nether and vice versa.
                 if (!portalBlock && !currentCancelToken.cancelled) {
                     const targetKey = action.target || 'nether';
                     const wp = loadWaypoints().find(w => {
                         const n = w.name.toLowerCase();
+                        const wpDim = (w.dimension || '').replace('minecraft:', '');
+                        // Skip waypoints that belong to a different dimension
+                        if (wpDim && wpDim !== originDim) return false;
                         return (n.includes('portal') || n.includes('gate')) && n.includes(targetKey);
                     });
                     if (wp) {
@@ -6916,27 +6927,78 @@ async function processActionQueue() {
                         console.log(`[Actuator] navigate_portal: portal found but socket dead, aborting.`);
                     } else {
                     bot.chat(`[System] Found ${portalLabel} portal. Entering...`);
+
+                    // Find the center of the portal block cluster so we walk into the middle of the
+                    // opening rather than the edge, which avoids getting stuck on the obsidian frame.
+                    await new Promise(resolve => setImmediate(resolve));
+                    const clusterPositions = findPortalCluster();
+                    let entryX = portalBlock.position.x, entryY = portalBlock.position.y, entryZ = portalBlock.position.z;
+                    if (clusterPositions.length > 1) {
+                        const { sumX, sumZ } = clusterPositions.reduce((acc, p) => ({ sumX: acc.sumX + p.x, sumZ: acc.sumZ + p.z }), { sumX: 0, sumZ: 0 });
+                        const avgX = sumX / clusterPositions.length;
+                        const avgZ = sumZ / clusterPositions.length;
+                        const minY = Math.min(...clusterPositions.map(p => p.y));
+                        // Use the lowest-row block closest to the horizontal centroid
+                        const groundBlocks = clusterPositions.filter(p => p.y === minY);
+                        if (groundBlocks.length > 0) {
+                            const center = groundBlocks.reduce((best, p) => {
+                                const d = (p.x - avgX) ** 2 + (p.z - avgZ) ** 2;
+                                const bd = (best.x - avgX) ** 2 + (best.z - avgZ) ** 2;
+                                return d < bd ? p : best;
+                            }, groundBlocks[0]);
+                            entryX = center.x; entryY = center.y; entryZ = center.z;
+                        }
+                        console.log(`[Actuator] Portal cluster: ${clusterPositions.length} blocks, entering at (${entryX},${entryY},${entryZ})`);
+                    }
+
+                    // Navigate to radius=0 to step INSIDE the portal block itself.
+                    // This avoids the "stuck on frame" issue where radius=1 can place the bot
+                    // at the obsidian frame edge and forward-push moves it along the frame instead
+                    // of through the opening.
                     try {
-                        await withTimeout(bot.pathfinder.goto(new goals.GoalNear(portalBlock.position.x, portalBlock.position.y, portalBlock.position.z, 1)), Math.max(timeoutMs, 60000), 'goto portal', () => bot.pathfinder.setGoal(null));
-                    } catch (e) { /* close enough */ }
+                        await withTimeout(bot.pathfinder.goto(new goals.GoalNear(entryX, entryY, entryZ, 0)), Math.max(timeoutMs, 60000), 'goto portal center', () => bot.pathfinder.setGoal(null));
+                    } catch (e) { /* close enough — proceed to teleport wait */ }
+
                     const currentDim = bot.game.dimension;
                     try {
+                        // Phase 1: Stand still inside the portal block.
+                        // Minecraft triggers teleportation after the player stands in a nether_portal
+                        // block for 4 seconds (80 ticks).  No movement key needed — pressing forward
+                        // causes the bot to walk through and PAST the portal if it isn't perfectly
+                        // centred, resulting in the "pass-through and strand" bug.
+                        bot.clearControlStates();
                         bot.lookAt(portalBlock.position.offset(0.5, 0.5, 0.5));
-                        bot.setControlState('forward', true);
+                        let teleported = false;
                         await withTimeout(new Promise(resolve => {
                             const check = setInterval(() => {
                                 if (bot.game.dimension !== currentDim) {
                                     clearInterval(check);
-                                    // Bug Fix 1: Hard-flush all movement state on dimension change.
-                                    // clearControlStates() stops every key (forward, sprint, jump, sneak,
-                                    // back, left, right) so the bot cannot drift on the obsidian platform
-                                    // or in the End void while waiting for chunks to load.
+                                    teleported = true;
                                     bot.clearControlStates();
                                     try { bot.pathfinder.setGoal(null); } catch (e) {}
                                     resolve();
                                 }
-                            }, 500);
-                        }), 12000, 'portal teleport');
+                            }, 250);
+                        }), 6000, 'portal stand-in').catch(() => {});
+
+                        // Phase 2: Fallback — if standing still didn't trigger teleport (bot may not
+                        // have been fully inside a portal block), gently press forward for up to 7s.
+                        if (!teleported && bot.game.dimension === currentDim) {
+                            console.log(`[Actuator] Portal stand-in timeout — trying forward push.`);
+                            bot.lookAt(portalBlock.position.offset(0.5, 0.5, 0.5));
+                            bot.setControlState('forward', true);
+                            await withTimeout(new Promise(resolve => {
+                                const check = setInterval(() => {
+                                    if (bot.game.dimension !== currentDim) {
+                                        clearInterval(check);
+                                        teleported = true;
+                                        bot.clearControlStates();
+                                        try { bot.pathfinder.setGoal(null); } catch (e) {}
+                                        resolve();
+                                    }
+                                }, 250);
+                            }), 7000, 'portal forward push');
+                        }
 
                         // Bug Fix 1: Give the new dimension time to load chunks and for the bot to
                         // land on the obsidian platform (End) or Nether floor before any further
@@ -6962,13 +7024,28 @@ async function processActionQueue() {
                         // CLEAR the action queue to avoid carrying overworld coordinates or old tasks into the new dimension
                         actionQueue = [];
 
-                        // Save portal location as waypoint for future use
+                        // Save portal waypoints for future navigation.
+                        // 1. Save the ORIGIN-side portal (pre-teleport dimension + coordinates).
+                        //    Bug fix: previously used bot.game.dimension (destination) by mistake.
+                        // 2. Scan for the DESTINATION-side portal that spawned us and save it too
+                        //    so the bot can find the return gate without a full grid search.
                         const waypoints = loadWaypoints();
                         const wpName = `${action.target || 'nether'}_portal`;
-                        if (!waypoints.find(w => w.name === wpName)) {
-                            waypoints.push({ name: wpName, x: Math.round(portalBlock.position.x), y: Math.round(portalBlock.position.y), z: Math.round(portalBlock.position.z), dimension: bot.game.dimension });
-                            saveWaypoints(waypoints);
+                        // originDim is already normalized (no 'minecraft:' prefix)
+                        if (!waypoints.find(w => w.name === wpName && (w.dimension || '').replace('minecraft:', '') === originDim)) {
+                            waypoints.push({ name: wpName, x: Math.round(portalBlock.position.x), y: Math.round(portalBlock.position.y), z: Math.round(portalBlock.position.z), dimension: originDim });
                         }
+                        // Scan destination dimension for the exit portal (usually right next to spawn point)
+                        await new Promise(resolve => setImmediate(resolve));
+                        const destDim = bot.game.dimension.replace('minecraft:', '');
+                        const destPortal = portalBlockId !== undefined ? bot.findBlock({ matching: portalBlockId, maxDistance: 8 }) : null;
+                        if (destPortal) {
+                            if (!waypoints.find(w => w.name === wpName && (w.dimension || '').replace('minecraft:', '') === destDim)) {
+                                waypoints.push({ name: wpName, x: Math.round(destPortal.position.x), y: Math.round(destPortal.position.y), z: Math.round(destPortal.position.z), dimension: destDim });
+                                console.log(`[Actuator] Saved ${destDim}-side portal waypoint at (${destPortal.position.x},${destPortal.position.y},${destPortal.position.z})`);
+                            }
+                        }
+                        saveWaypoints(waypoints);
                         process.send({ type: 'USER_CHAT', data: { username: "System", message: `Entered portal. Now in ${bot.game.dimension}. Actions cleared.`, environment: getEnvironmentContext() } });
                     } catch (e) {
                         bot.clearControlStates();
