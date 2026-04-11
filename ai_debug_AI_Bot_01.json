@@ -1,16 +1,16 @@
 {
-  "timestamp": "2026-04-10T17:20:16.604Z",
+  "timestamp": "2026-04-10T18:38:33.287Z",
   "ready": true,
   "position": {
-    "x": -512.3,
-    "y": 64,
-    "z": -494.7
+    "x": -410.5,
+    "y": 88,
+    "z": -299.5
   },
   "health": 20,
   "food": 20,
   "dimension": "overworld",
   "isExecuting": true,
-  "currentAction": "collect",
+  "currentAction": "come",
   "actionQueue": [],
   "treeDir": null,
   "inventory": [
@@ -20,7 +20,7 @@
     },
     {
       "name": "createbigcannons:flowing_molten_nethersteel",
-      "count": 64
+      "count": 38
     },
     {
       "name": "iron_shovel",
@@ -32,11 +32,11 @@
     },
     {
       "name": "createbigcannons:molten_cast_iron",
-      "count": 61
+      "count": 39
     },
     {
       "name": "createbigcannons:flowing_molten_nethersteel",
-      "count": 40
+      "count": 38
     },
     {
       "name": "create:limestone",
@@ -48,6 +48,6 @@
     "torso": "create_jetpack:jetpack",
     "legs": "iron_leggings",
     "feet": null,
-    "hand": "createbigcannons:molten_cast_iron"
+    "hand": "createbigcannons:flowing_molten_nethersteel"
   }
 }

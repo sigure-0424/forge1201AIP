@@ -522,7 +522,9 @@ bot.on('spawn', async () => {
 
     bot.pathfinder.setMovements(movements);
     // Keep path planning responsive around gaps/void edges.
-    bot.pathfinder.thinkTimeout = 5000;
+    // Reduced from 5000→2000ms: a 5s A* run blocks the event loop long enough for the
+    // server keepalive packet to go unacknowledged → Forge kicks the bot near water terrain.
+    bot.pathfinder.thinkTimeout = 2000;
     bot.pathfinder.tickTimeout = 5;
 
     // VDS-001: Wrap pathfinder.goto/setGoal to broadcast path goals to overlays.
@@ -934,19 +936,17 @@ bot.on('spawn', async () => {
 
             // SWIMMING_OVERRIDE_START
             // Issue 9: Improve swimming speed and straight-line movement.
-            // If the bot is moving via the pathfinder and is in water, force it to sprint and jump
-            // to simulate swimming rather than bouncing vertically at the surface.
-            if (moving && inWater) {
-                bot.setControlState('sprint', true);
+            // Fix: guard with !onGround so waterlogged-block standing (bot physically on a
+            // solid-but-waterlogged block) does NOT trigger the jump override.  Without this
+            // guard the bot oscillates jump=true/false every tick while standing next to water,
+            // which prevents forward movement and eventually triggers a Forge server disconnect.
+            // Also removed sprint=true: movements.allowSprinting=false means the pathfinder
+            // resets sprint every tick, creating a sprint-toggle storm that Forge anti-cheat
+            // interprets as illegal movement → kick.
+            if (moving && inWater && !onGround) {
                 bot.setControlState('jump', true);
-
-                // If there's a specific path node, ensure we look and move straight towards it
-                if (bot.pathfinder.goal && bot.pathfinder.goal.hasChanged && typeof bot.pathfinder.goal.hasChanged === 'function') {
-                     // Just keep forward true, looking logic is handled by pathfinder but sprinting helps speed.
-                     bot.setControlState('forward', true);
-                }
-            } else if (!moving && inWater && bot.getControlState('jump')) {
-                // If we stopped moving, stop jumping so we don't bob infinitely
+            } else if ((!moving || onGround) && inWater && bot.getControlState('jump')) {
+                // If we stopped moving or landed, stop jumping so we don't bob infinitely
                 bot.setControlState('jump', false);
             }
             // SWIMMING_OVERRIDE_END
@@ -5725,12 +5725,43 @@ async function processActionQueue() {
             } else if (action.action === 'give') {
                 const targetPlayer = bot.players[action.target]?.entity;
                 const itemTargetName = action.item || action.target;
-                const inventoryItem = resolveInventoryItemForTarget(itemTargetName);
+                let inventoryItem = resolveInventoryItemForTarget(itemTargetName);
+
+                // If not found in regular inventory, also check armor/equipment slots.
+                // bot.inventory.items() does not include equipped armor; search slots explicitly.
+                let equippedSlot = null;
+                if (!inventoryItem) {
+                    const GIVE_EQUIP_DESTS = ['head', 'torso', 'legs', 'feet', 'off-hand'];
+                    for (const dest of GIVE_EQUIP_DESTS) {
+                        const slotItem = bot.inventory.slots[bot.getEquipmentDestSlot(dest)];
+                        if (!slotItem) continue;
+                        const n = slotItem.name.toLowerCase();
+                        const wanted = String(itemTargetName || '').toLowerCase().trim();
+                        if (n === wanted || n.includes(wanted) ||
+                            _shortItemName(n).includes(_shortItemName(wanted))) {
+                            equippedSlot = dest;
+                            inventoryItem = slotItem;
+                            break;
+                        }
+                    }
+                }
+
                 if (targetPlayer && inventoryItem) {
                     const quantity = Math.max(1, parseInt(action.quantity, 10) || 1);
                     bot.chat(`[System] Giving ${quantity} ${itemTargetName} to ${action.target}...`);
                     await withTimeout(bot.pathfinder.goto(new goals.GoalNear(targetPlayer.position.x, targetPlayer.position.y, targetPlayer.position.z, 2)), timeoutMs, 'goto player for give', () => bot.pathfinder.setGoal(null));
                     await bot.lookAt(targetPlayer.position.offset(0, 1.6, 0));
+                    // If item is currently equipped, unequip it first to move it to regular inventory
+                    if (equippedSlot) {
+                        await bot.unequip(equippedSlot);
+                        await new Promise(r => setTimeout(r, 200));
+                        inventoryItem = resolveInventoryItemForTarget(itemTargetName);
+                        if (!inventoryItem) {
+                            actionQueue = [];
+                            bot.chat(`[System Error] Failed to unequip ${itemTargetName}.`);
+                            continue;
+                        }
+                    }
                     if (bot.tossStack && quantity >= inventoryItem.count) {
                         await bot.tossStack(inventoryItem);
                     } else if (bot.tossStack && quantity === 1) {
