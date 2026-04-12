@@ -255,19 +255,34 @@ html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; font-
 .macro-modal { width: 1080px; max-width: 98vw; overflow-x: auto; }
 .macro-help { color: var(--text-dim); font-size: 12px; margin: -4px 0 12px; }
 .macro-row {
-    display: grid;
-    grid-template-columns: 110px 120px 72px 72px 72px 120px 72px 84px minmax(120px, 1fr) 40px;
+    display: flex;
+    flex-wrap: nowrap;
     gap: 6px;
     margin-bottom: 6px;
-    min-width: 860px;
+    align-items: center;
 }
+.macro-action {
+    flex: 0 0 110px;
+    background: var(--bg3); border: 1px solid var(--border);
+    color: var(--text); padding: 6px 8px; border-radius: var(--radius);
+    font-size: 12px; outline: none;
+}
+.macro-action:focus { border-color: var(--accent); }
 .macro-field {
-    width: 100%; background: var(--bg3); border: 1px solid var(--border);
+    background: var(--bg3); border: 1px solid var(--border);
     color: var(--text); padding: 6px 8px; border-radius: var(--radius);
     font-size: 12px; outline: none;
 }
 .macro-field:focus { border-color: var(--accent); }
-.macro-message { min-width: 120px; }
+.macro-text { flex: 1 1 110px; min-width: 80px; max-width: 200px; }
+.macro-num  { flex: 0 0 72px; }
+.macro-usepos {
+    flex: 0 0 28px; padding: 4px 6px; font-size: 13px;
+    background: var(--bg3); border: 1px solid var(--border);
+    color: var(--text); border-radius: var(--radius); cursor: pointer;
+}
+.macro-usepos:hover { border-color: var(--accent); }
+.macro-del  { flex: 0 0 32px; }
 .macro-toolbar, .macro-actions { display: flex; gap: 8px; margin-top: 10px; }
 .macro-actions { justify-content: flex-end; }
 
@@ -279,7 +294,7 @@ html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; font-
 
 @media (max-width: 1100px) {
     .macro-row {
-        grid-template-columns: 1fr 1fr 1fr;
+        flex-wrap: wrap;
     }
     #main { grid-template-rows: 1fr 250px 250px; }
     .knowledge-query-row { grid-template-columns: 1fr 70px 110px; }

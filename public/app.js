@@ -13,6 +13,26 @@ const state = {
 const MACRO_STORAGE_KEY = 'forgeaip_macros_v1';
 const MACRO_ACTIONS = ['goto', 'come', 'collect', 'give', 'equip', 'craft', 'place', 'eat', 'smelt', 'kill', 'status', 'wait', 'stop', 'chat'];
 
+// Per-action field definitions: which inputs are relevant for each action type.
+// Each entry is an array of { key, placeholder, type, hint } objects.
+// Fields not listed are hidden so the row stays compact.
+const ACTION_FIELDS = {
+    goto:    [{ key:'x', ph:'x', type:'num' }, { key:'y', ph:'y', type:'num' }, { key:'z', ph:'z', type:'num' }, { key:'timeout', ph:'timeout(s)', type:'num' }],
+    come:    [{ key:'target', ph:'player name' }, { key:'timeout', ph:'timeout(s)', type:'num' }],
+    collect: [{ key:'target', ph:'block/item' }, { key:'quantity', ph:'qty', type:'num' }, { key:'timeout', ph:'timeout(s)', type:'num' }],
+    give:    [{ key:'target', ph:'player name' }, { key:'item', ph:'item name' }, { key:'quantity', ph:'qty', type:'num' }],
+    equip:   [{ key:'item', ph:'item name' }],
+    craft:   [{ key:'item', ph:'item name' }, { key:'quantity', ph:'qty', type:'num' }],
+    place:   [{ key:'item', ph:'item/block name' }, { key:'x', ph:'x', type:'num' }, { key:'y', ph:'y', type:'num' }, { key:'z', ph:'z', type:'num' }],
+    eat:     [{ key:'item', ph:'food item (opt)' }],
+    smelt:   [{ key:'item', ph:'item to smelt' }, { key:'quantity', ph:'qty', type:'num' }, { key:'timeout', ph:'timeout(s)', type:'num' }],
+    kill:    [{ key:'target', ph:'mob/player' }, { key:'timeout', ph:'timeout(s)', type:'num' }],
+    status:  [],
+    wait:    [{ key:'timeout', ph:'seconds', type:'num' }],
+    stop:    [],
+    chat:    [{ key:'message', ph:'message text' }],
+};
+
 /* ─── DOM Refs ───────────────────────────────────────────────────────────────── */
 const $ = id => document.getElementById(id);
 const els = {
@@ -461,25 +481,99 @@ function updateMacroBotSelect() {
     if (!els.macroBotSelect.value && state.selectedBot) els.macroBotSelect.value = state.selectedBot;
 }
 
+function _buildMacroRowFields(action) {
+    const fieldDefs = ACTION_FIELDS[action] || [];
+    const hasCoords = fieldDefs.some(f => f.key === 'x');
+    let html = '';
+    for (const f of fieldDefs) {
+        const cls = f.type === 'num' ? 'macro-field macro-num' : 'macro-field macro-text';
+        html += `<input class="${cls}" data-key="${f.key}" placeholder="${f.ph}" title="${f.key}">`;
+    }
+    // Add "use bot position" button when x/y/z are present
+    if (hasCoords) {
+        html += `<button class="btn macro-usepos" title="Fill coords from selected bot's current position">📍</button>`;
+    }
+    return html;
+}
+
+function _rebuildMacroRowFields(row) {
+    const action = row.querySelector('.macro-action').value;
+    // Collect existing values before rebuilding
+    const existing = {};
+    for (const f of row.querySelectorAll('[data-key]')) existing[f.dataset.key] = f.value;
+
+    // Replace only the dynamic part (everything after the action select, before the del button)
+    const sel = row.querySelector('.macro-action');
+    const del = row.querySelector('.macro-del');
+    // Remove all nodes between sel and del
+    let cur = sel.nextSibling;
+    while (cur && cur !== del) {
+        const next = cur.nextSibling;
+        row.removeChild(cur);
+        cur = next;
+    }
+    // Insert new fields
+    const tmp = document.createElement('div');
+    tmp.innerHTML = _buildMacroRowFields(action);
+    while (tmp.firstChild) row.insertBefore(tmp.firstChild, del);
+
+    // Restore values
+    for (const [k, v] of Object.entries(existing)) {
+        const f = row.querySelector(`[data-key="${k}"]`);
+        if (f && v) f.value = v;
+    }
+
+    // Wire position button
+    const posBtn = row.querySelector('.macro-usepos');
+    if (posBtn) {
+        posBtn.addEventListener('click', () => {
+            const botId = els.macroBotSelect?.value || state.selectedBot;
+            const botState = state.bots[botId];
+            const pos = botState?.environment?.position || botState?.status?.position;
+            if (pos) {
+                const xf = row.querySelector('[data-key="x"]');
+                const yf = row.querySelector('[data-key="y"]');
+                const zf = row.querySelector('[data-key="z"]');
+                if (xf) xf.value = Math.round(pos.x);
+                if (yf) yf.value = Math.round(pos.y);
+                if (zf) zf.value = Math.round(pos.z);
+            }
+        });
+    }
+}
+
 function addMacroRow(data = {}) {
     const row = document.createElement('div');
     row.className = 'macro-row';
+    const action = data.action || 'goto';
     row.innerHTML = `
-      <select class="macro-field macro-action">${MACRO_ACTIONS.map(a => `<option value="${a}">${a}</option>`).join('')}</select>
-      <input class="macro-field" data-key="target" placeholder="target">
-      <input class="macro-field" data-key="x" placeholder="x">
-      <input class="macro-field" data-key="y" placeholder="y">
-      <input class="macro-field" data-key="z" placeholder="z">
-      <input class="macro-field" data-key="item" placeholder="item">
-      <input class="macro-field" data-key="quantity" placeholder="qty">
-      <input class="macro-field" data-key="timeout" placeholder="timeout">
-      <input class="macro-field macro-message" data-key="message" placeholder="message">
+      <select class="macro-field macro-action">${MACRO_ACTIONS.map(a => `<option value="${a}"${a === action ? ' selected' : ''}>${a}</option>`).join('')}</select>
+      ${_buildMacroRowFields(action)}
       <button class="btn btn-danger macro-del">✕</button>
     `;
-    row.querySelector('.macro-action').value = data.action || 'goto';
+    // Fill values from data
     for (const [k, v] of Object.entries(data)) {
         const field = row.querySelector(`[data-key="${k}"]`);
         if (field) field.value = v;
+    }
+    // Rebuild fields when action changes
+    row.querySelector('.macro-action').addEventListener('change', () => _rebuildMacroRowFields(row));
+    // Wire position button (if present after initial build)
+    const posBtn = row.querySelector('.macro-usepos');
+    if (posBtn) {
+        posBtn.addEventListener('click', () => {
+            const botId = els.macroBotSelect?.value || state.selectedBot;
+            const botState = state.bots[botId];
+            const pos = botState?.environment?.position || botState?.status?.position;
+            if (pos) {
+                const xf = row.querySelector('[data-key="x"]');
+                const yf = row.querySelector('[data-key="y"]');
+                const zf = row.querySelector('[data-key="z"]');
+                if (xf) xf.value = Math.round(pos.x);
+                if (yf) yf.value = Math.round(pos.y);
+                if (zf) zf.value = Math.round(pos.z);
+            }
+        });
     }
     row.querySelector('.macro-del').addEventListener('click', () => row.remove());
     els.macroRows.appendChild(row);

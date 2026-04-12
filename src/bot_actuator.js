@@ -117,6 +117,10 @@ const bot = mineflayer.createBot({
     hideErrors: true
 });
 
+// ── Actuator context singleton — shared with extracted modules ────────────────
+const _actCtx = require('./actuator/ctx');
+_actCtx.bot   = bot;
+
 function hardenClientChatParsers() {
     const client = bot && bot._client;
     if (!client) return;
@@ -196,6 +200,40 @@ bot.on('error', (err) => {
 });
 
 const mcData = require('minecraft-data')(bot.version);
+_actCtx.mcData = mcData;
+
+// ── Module delegates — extracted from this file into src/actuator/ ────────────
+const {
+    withTimeout,
+    isAirLikeBlock, isSolidBridgeSupport, isSafeForward,
+    hasForwardGap, hasLikelyBridgeNeed, chooseBridgeBlock,
+} = require('./actuator/utils');
+const {
+    STRUCTURE_NAMES, normalizeStructureTarget, waitForLocateResult,
+    loadWaypoints, saveWaypoints, findWaypoint,
+    loadPathCache, savePathCache, getPathCacheKey, PATH_CACHE_MAX_AGE_MS,
+    _readBlackboard, _writeBlackboard, _loadSafeZones, _isInSafeZone,
+    _saveQueueCheckpoint, _loadQueueCheckpoint, _clearQueueCheckpoint,
+    _shouldUseBoat, _loadJunkList, _saveJunkList, _runAutoShredder,
+    getEnvironmentContext,
+} = require('./actuator/environment');
+const {
+    JETPACK_MOD_REGISTRY, detectAviationMethod, _setServerFlyingFlag,
+    getJetpackFuelRatio, tryElytraGapCross, tryBridgeForward,
+    flyWithJetpack, flyWithElytra,
+} = require('./actuator/flight');
+const {
+    TOOL_SUFFIXES, WEAPON_PRIORITY, ARMOR_TIERS, ARMOR_PIECES,
+    PLANK_NAMES, LOG_NAMES, MATERIAL_TAG_GROUPS,
+    _shortItemName, resolveInventoryItemForTarget, placeItemIntelligently,
+    equipBestTool, equipBestWeapon, equipBestArmor,
+    isMissingGear, getEquipmentContainerIds,
+    _normalizeContainerKind, _normalizeItemTargetName,
+    _isContainerBlockByName, _getContainerBlockIds,
+    _resolveContainerCoords, _listContainerCandidates, _resolveTargetItemIds,
+    _withdrawFromOpenedContainer, _depositToOpenedContainer,
+    withdrawNeededEquipment, getBestFoodItem, inferToolCategory, ensureToolFor,
+} = require('./actuator/tools');
 
 bot.on('inject_allowed', () => {
     console.log('[Actuator] Connection allowed. Starting handshake machine...');
@@ -456,6 +494,7 @@ bot.on('spawn', async () => {
     // Keep at vanilla default for consistent behavior.
 
     movements = new Movements(bot, mcData);
+    _actCtx.movements = movements; // keep ctx in sync for extracted modules
     movements.canDig = true;
     // Sprinting sends rapid movement packets that can trigger Forge server anti-cheat (EPIPE kick).
     // Walk speed (~4.3 b/s) is sufficient on flat terrain and safer on all terrain types.
@@ -1583,135 +1622,6 @@ bot.on('spawn', async () => {
     })().catch(e => console.log('[Actuator] Background water escape error:', e.message));
 });
 
-function getEnvironmentContext() {
-    const nearbyBlocks = [];
-    if (bot.entity) {
-        // Find interactive blocks in a single pass to prevent blocking the event loop
-        const interactiveNames = ['crafting_table', 'furnace', 'blast_furnace', 'smoker', 'chest', 'barrel',
-                                  'anvil', 'enchanting_table', 'brewing_stand', 'end_portal', 'end_portal_frame', 'nether_portal'];
-        const interactiveIds = new Set();
-        for (const name of interactiveNames) {
-            const id = bot.registry.blocksByName[name]?.id;
-            if (id !== undefined) interactiveIds.add(id);
-        }
-
-        // Also match any bed (which are suffixed with _bed)
-        const isInteractive = b => b && (interactiveIds.has(b.type) || b.name.endsWith('_bed'));
-
-        const foundInteractive = bot.findBlocks({ matching: isInteractive, maxDistance: 16, count: 24 });
-        const addedInteractive = new Set();
-        for (const pos of foundInteractive) {
-            const b = bot.blockAt(pos);
-            if (b && !addedInteractive.has(b.name)) {
-                nearbyBlocks.push(b.name);
-                addedInteractive.add(b.name);
-            }
-        }
-
-        // Add a scan of surrounding blocks within a 8-block radius to help the LLM know what's available
-        // Reduced from 16 to 8 to keep sync loop <1ms (17x17x17 = 4913 blocks instead of 35937)
-        try {
-            const pos = bot.entity.position.floored();
-            const counts = {};
-            for (let dx = -8; dx <= 8; dx++) {
-                for (let dy = -8; dy <= 8; dy++) {
-                    for (let dz = -8; dz <= 8; dz++) {
-                        const b = bot.blockAt(pos.offset(dx, dy, dz));
-                        if (b && b.name !== 'air' && b.name !== 'cave_air' && b.name !== 'void_air') {
-                            counts[b.name] = (counts[b.name] || 0) + 1;
-                        }
-                    }
-                }
-            }
-
-            // Limit to top 20 most common blocks to save context length
-            const sortedBlocks = Object.entries(counts)
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 20)
-                .map(([name, count]) => `${count}x ${name}`);
-
-            if (sortedBlocks.length > 0) {
-                nearbyBlocks.push(...sortedBlocks);
-            }
-        } catch(e) {}
-    }
-    // Issue 1: Detect what structure the bot is currently inside by scanning for signature blocks.
-    // Gives the LLM accurate location context (e.g. "already in nether_fortress").
-    const nearbyStructures = [];
-    if (bot.entity) {
-        const structureMarkers = [
-            { name: 'nether_fortress', blocks: ['nether_bricks', 'nether_brick_fence', 'nether_brick_stairs'] },
-            { name: 'stronghold',      blocks: ['end_portal_frame', 'mossy_stone_bricks'] },
-            { name: 'ocean_monument',  blocks: ['prismarine', 'sea_lantern'] },
-        ];
-
-        const markerIdToStruct = new Map();
-        for (const { name, blocks } of structureMarkers) {
-            for (const blockName of blocks) {
-                const id = bot.registry.blocksByName[blockName]?.id;
-                if (id !== undefined) markerIdToStruct.set(id, name);
-            }
-        }
-
-        const isMarker = b => b && markerIdToStruct.has(b.type);
-        // Reduced maxDistance from 32 to 24 to keep the scan extremely fast and prevent event loop stalling
-        const foundMarkers = bot.findBlocks({ matching: isMarker, maxDistance: 24, count: 20 });
-        const addedStructures = new Set();
-
-        for (const pos of foundMarkers) {
-            const b = bot.blockAt(pos);
-            if (b) {
-                const structName = markerIdToStruct.get(b.type);
-                if (structName && !addedStructures.has(structName)) {
-                    nearbyStructures.push(structName);
-                    addedStructures.add(structName);
-                }
-            }
-        }
-    }
-
-    const nearbyEntities = [];
-    if (bot.entity && bot.entities) {
-        for (const ent of Object.values(bot.entities)) {
-            if (ent === bot.entity || !ent.isValid) continue;
-            // Expand distance to 128 blocks so the LLM doesn't incorrectly assume an entity
-            // doesn't exist just because it is out of the previous 64-block radius
-            if (bot.entity.position.distanceTo(ent.position) <= 128) {
-                const name = (ent.name || ent.displayName || ent.username || '').toLowerCase();
-                if (name && name !== 'item' && name !== 'experience_orb') {
-                    nearbyEntities.push(name);
-                }
-            }
-        }
-    }
-    // Deduplicate and count nearby entities
-    const entityCounts = nearbyEntities.reduce((acc, name) => {
-        acc[name] = (acc[name] || 0) + 1;
-        return acc;
-    }, {});
-    const entitySummary = Object.entries(entityCounts).map(([name, count]) => `${count}x ${name}`);
-
-    const inventoryItems = bot.inventory ? bot.inventory.items() : [];
-    return {
-        position: bot.entity ? {
-            x: Math.round(bot.entity.position.x),
-            y: Math.round(bot.entity.position.y),
-            z: Math.round(bot.entity.position.z)
-        } : null,
-        dimension: bot.game?.dimension || null,
-        health: bot.health ? Math.round(bot.health) : null,
-        food: bot.food ? Math.round(bot.food) : null,
-        players_nearby: Object.keys(bot.players).filter(p => p !== bot.username && bot.players[p].entity),
-        inventory: inventoryItems.map(item => ({ name: item.name, count: item.count })),
-        has_pickaxe: inventoryItems.some(i => i.name.endsWith('_pickaxe')),
-        has_axe: inventoryItems.some(i => i.name.endsWith('_axe')),
-        has_sword: inventoryItems.some(i => i.name.endsWith('_sword')),
-        nearby_blocks: nearbyBlocks,
-        nearby_structures: nearbyStructures,
-        nearby_entities: entitySummary,
-        blackboard: _readBlackboard()
-    };
-}
 
 // Eye (Perception)
 // Forge 1.20.1 servers can deliver the same player chat message twice
@@ -1763,148 +1673,20 @@ bot.on('chat', (username, message) => {
 // ─── Internal Waypoint System ──────────────────────────────────────────────────
 const WAYPOINTS_FILE = path.join(process.cwd(), 'data', 'waypoints.json');
 
-function loadWaypoints() {
-    try {
-        if (fs.existsSync(WAYPOINTS_FILE)) {
-            const raw = JSON.parse(fs.readFileSync(WAYPOINTS_FILE, 'utf8'));
-            if (!Array.isArray(raw)) return [];
-            return raw.filter(w => {
-                if (!w || !w.name || w.x === undefined || w.y === undefined || w.z === undefined || !w.dimension) {
-                    console.warn(`[Actuator] Dropped invalid waypoint entry: ${JSON.stringify(w)}`);
-                    return false;
-                }
-                return true;
-            });
-        }
-    } catch (e) {}
-    return [];
-}
 
-function saveWaypoints(waypoints) {
-    try {
-        const dir = path.dirname(WAYPOINTS_FILE);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(WAYPOINTS_FILE, JSON.stringify(waypoints, null, 2));
-    } catch (e) {
-        console.error(`[Actuator] Failed to save waypoints: ${e.message}`);
-    }
-}
 
-function findWaypoint(name) {
-    const waypoints = loadWaypoints();
-    return waypoints.find(w => w.name.toLowerCase() === name.toLowerCase()) || null;
-}
 
 // ─── Path Cache System ─────────────────────────────────────────────────────
 // Caches the last successful set of XZ waypoints used to reach a destination.
 // Reduces A* compute on repeated routes (e.g. base→mine, overworld→portal).
 const PATH_CACHE_FILE = path.join(process.cwd(), 'data', 'path_cache.json');
-const PATH_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12 hours
 
-function loadPathCache() {
-    try {
-        if (fs.existsSync(PATH_CACHE_FILE)) {
-            return JSON.parse(fs.readFileSync(PATH_CACHE_FILE, 'utf8'));
-        }
-    } catch (e) {}
-    return {};
-}
 
-function savePathCache(cache) {
-    try {
-        const dir = path.dirname(PATH_CACHE_FILE);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(PATH_CACHE_FILE, JSON.stringify(cache, null, 2));
-    } catch (e) {
-        console.error(`[Actuator] Failed to save path cache: ${e.message}`);
-    }
-}
 
-function getPathCacheKey(destX, destZ, dimension) {
-    // Quantize to 16-block grid so nearby-destination queries get a cache hit.
-    return `${dimension || 'overworld'}:${Math.round(destX / 16) * 16}:${Math.round(destZ / 16) * 16}`;
-}
 
 // Structure name → minecraft:id mapping for /locate command
-const STRUCTURE_NAMES = {
-    'fortress': 'fortress', 'nether_fortress': 'fortress',
-    'nether fortress': 'fortress', 'netherfortress': 'fortress',
-    'stronghold': 'stronghold',
-    'mansion': 'mansion', 'woodland_mansion': 'mansion',
-    'woodland mansion': 'mansion',
-    'village': 'village',
-    'monument': 'monument', 'ocean_monument': 'monument',
-    'ocean monument': 'monument',
-    'desert_pyramid': 'desert_pyramid', 'desert_temple': 'desert_pyramid',
-    'desert pyramid': 'desert_pyramid', 'desert temple': 'desert_pyramid',
-    'jungle_pyramid': 'jungle_temple', 'jungle_temple': 'jungle_temple',
-    'jungle pyramid': 'jungle_temple', 'jungle temple': 'jungle_temple',
-    'ruined_portal': 'ruined_portal',
-    'ruined portal': 'ruined_portal',
-    'shipwreck': 'shipwreck',
-    'pillager_outpost': 'pillager_outpost',
-    'pillager outpost': 'pillager_outpost',
-    'bastion_remnant': 'bastion_remnant',
-    'bastion remnant': 'bastion_remnant',
-    'end_city': 'end_city',
-    'end city': 'end_city', 'endcity': 'end_city',
-    'igloo': 'igloo',
-    'swamp_hut': 'swamp_hut',
-    'swamp hut': 'swamp_hut',
-    'ocean_ruin': 'ocean_ruin',
-    'ocean ruin': 'ocean_ruin',
-    'buried_treasure': 'buried_treasure',
-    'buried treasure': 'buried_treasure',
-    'ancient_city': 'ancient_city',
-    'ancient city': 'ancient_city',
-    'trail_ruins': 'trail_ruins',
-    'trail ruins': 'trail_ruins',
-};
 
-function normalizeStructureTarget(target) {
-    return String(target || '')
-        .toLowerCase()
-        .replace(/^minecraft:/, '')
-        .replace(/[\s-]+/g, '_')
-        .replace(/[^a-z0-9_]/g, '')
-        .trim();
-}
 
-async function waitForLocateResult(timeoutMs = 12000) {
-    return await new Promise((resolve) => {
-        const done = (result) => {
-            clearTimeout(timeout);
-            bot.removeListener('messagestr', onMessageStr);
-            bot.removeListener('message', onMessageJson);
-            resolve(result);
-        };
-        const tryExtract = (text) => {
-            const msg = String(text || '');
-            const xz = msg.match(/\[X:\s*(-?\d+)[^\]]*Z:\s*(-?\d+)\]/i)
-                || msg.match(/x\s*[:=]\s*(-?\d+).{0,40}z\s*[:=]\s*(-?\d+)/i);
-            if (xz) {
-                return { x: parseInt(xz[1], 10), z: parseInt(xz[2], 10) };
-            }
-            if (/could not find|not find|no structure|cannot locate/i.test(msg)) {
-                return { error: msg };
-            }
-            return null;
-        };
-        const onMessageStr = (message) => {
-            const found = tryExtract(message);
-            if (found) done(found);
-        };
-        const onMessageJson = (jsonMsg) => {
-            const text = typeof jsonMsg?.toString === 'function' ? jsonMsg.toString() : '';
-            const found = tryExtract(text);
-            if (found) done(found);
-        };
-
-        const timeout = setTimeout(() => done(null), timeoutMs);
-        bot.on('messagestr', onMessageStr);
-        bot.on('message', onMessageJson);
-    });
-}
 
 // ─── Looted chest tracking (prevents re-looting same chest) ────────────────────
 const _lootedChests = new Set();
@@ -2000,252 +1782,27 @@ const NON_RESUMABLE_ACTIONS = new Set(['give', 'smelt', 'brew', 'enchant', 'acti
 // Category B (right_click, nbt_fe): Thermal, Ender IO, Galacticraft
 // Category B (right_click, durability): IC2, IC2Classic, Advanced Rocketry
 // Category C (hover, nbt_fe): Modular Powersuits
-const JETPACK_MOD_REGISTRY = {
-    // ── Category A: passive ─────────────────────────────────────────────────
-    // Simply Jetpacks 2: RF stored as NBT Energy/MaxEnergy (long values).
-    simplyjetpacks2:  { itemPattern: /jetpack/i,
-                        activateMethod: 'none',
-                        fuelType: 'nbt_fe',   fuelNbtPath: ['Energy'], fuelNbtMaxPath: ['MaxEnergy'] },
-    simplerjetpacks2: { itemPattern: /jetpack/i,
-                        activateMethod: 'none',
-                        fuelType: 'nbt_fe',   fuelNbtPath: ['Energy'], fuelNbtMaxPath: ['MaxEnergy'] },
-    // Create Jetpack: compressed air shown as durability bar (universal read).
-    create_jetpack:   { itemPattern: /jetpack/i,
-                        activateMethod: 'none',
-                        fuelType: 'durability' },
-    // Create Stuff & Additions (brass/andesite/copper/netherite variants).
-    create_sa:        { itemPattern: /jetpack_chestplate/i,
-                        activateMethod: 'none',
-                        fuelType: 'durability' },
-    // Jetpacks! (Lonazark / reforged ports) — RF, nbt Energy/MaxEnergy.
-    jetpacks:         { itemPattern: /jetpack/i,
-                        activateMethod: 'none',
-                        fuelType: 'nbt_fe' },
-    // PneumaticCraft Repressurized — pressure shown as NBT Air/MaxAir.
-    pneumaticcraft:   { itemPattern: /pneumatic_chestplate|jetpack/i,
-                        activateMethod: 'none',
-                        fuelType: 'nbt_fe',   fuelNbtPath: ['Air'], fuelNbtMaxPath: ['MaxAir'] },
-    // Mekanism: meka-suit with jetpack unit — FE in nested EnergyContainers.
-    mekanism:         { itemPattern: /mekasuit_bodyarmor|jetpack/i,
-                        activateMethod: 'none',
-                        fuelType: 'nbt_fe' },
-    // Powah: RF stored as Energy/MaxEnergy.
-    powah:            { itemPattern: /jetpack/i,
-                        activateMethod: 'none',
-                        fuelType: 'nbt_fe' },
-    // Bigger Reactors / Extreme Reactors accessory jetpack.
-    biggerreactors:   { itemPattern: /jetpack/i,
-                        activateMethod: 'none',
-                        fuelType: 'nbt_fe' },
-    extremereactors:  { itemPattern: /jetpack/i,
-                        activateMethod: 'none',
-                        fuelType: 'nbt_fe' },
-    // Iron Jetpacks — FE stored as Energy/MaxEnergy.
-    ironjetpacks:     { itemPattern: /jetpack/i,
-                        activateMethod: 'none',
-                        fuelType: 'nbt_fe' },
-    // ── Category B: right-click toggle ─────────────────────────────────────
-    // Thermal Series (Thermal Innovation / Thermal Locomotion) — RF.
-    thermal:          { itemPattern: /jetpack/i,
-                        activateMethod: 'right_click',
-                        fuelType: 'nbt_fe' },
-    thermalinnovation:{ itemPattern: /jetpack/i,
-                        activateMethod: 'right_click',
-                        fuelType: 'nbt_fe' },
-    // Ender IO — capacitor jetpack, RF.
-    enderio:          { itemPattern: /jetpack/i,
-                        activateMethod: 'right_click',
-                        fuelType: 'nbt_fe' },
-    // IC2 / IC2 Classic — EU stored as durability bar.
-    ic2:              { itemPattern: /jetpack/i,
-                        activateMethod: 'right_click',
-                        fuelType: 'durability' },
-    ic2classic:       { itemPattern: /jetpack/i,
-                        activateMethod: 'right_click',
-                        fuelType: 'durability' },
-    // Galacticraft — fuel stored as durability.
-    galacticraftcore: { itemPattern: /jetpack/i,
-                        activateMethod: 'right_click',
-                        fuelType: 'durability' },
-    // Advanced Rocketry — durability-based fuel.
-    advancedrocketry: { itemPattern: /jetpack/i,
-                        activateMethod: 'right_click',
-                        fuelType: 'durability' },
-    // ── Category C: hover mode ──────────────────────────────────────────────
-    // Modular Powersuits — releasing jump stops vertical movement (hover).
-    powersuits:       { itemPattern: /powersuit/i,
-                        activateMethod: 'none',
-                        fuelType: 'nbt_fe',
-                        hoverMode: true },
-    // ── Generic fallback ────────────────────────────────────────────────────
-    // activateMethod:'auto' = passive first; right_click recovery on stall.
-    // fuelType:'auto' tries nbt_fe first, then durability.
-    _generic:         { itemPattern: /jetpack/i,
-                        activateMethod: 'auto',
-                        fuelType: 'auto' },
-};
 
 // ─── Blackboard (Change 2) ────────────────────────────────────────────────────
-const BLACKBOARD_FILE = path.join(process.cwd(), 'data', 'blackboard.json');
 
-function _readBlackboard() {
-    try {
-        if (!fs.existsSync(BLACKBOARD_FILE)) return {};
-        return JSON.parse(fs.readFileSync(BLACKBOARD_FILE, 'utf8'));
-    } catch(e) { return {}; }
-}
 
-function _writeBlackboard(data) {
-    try {
-        const dir = path.dirname(BLACKBOARD_FILE);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(BLACKBOARD_FILE, JSON.stringify(data, null, 2));
-    } catch(e) {}
-}
 
 // ─── Safe Zones (Change 3) ────────────────────────────────────────────────────
-const SAFE_ZONES_FILE = path.join(process.cwd(), 'data', 'safezones.json');
 
-function _loadSafeZones() {
-    try {
-        if (!fs.existsSync(SAFE_ZONES_FILE)) return [];
-        return JSON.parse(fs.readFileSync(SAFE_ZONES_FILE, 'utf8'));
-    } catch(e) { return []; }
-}
 
-function _isInSafeZone(pos, dimension) {
-    try {
-        const zones = _loadSafeZones();
-        for (const zone of zones) {
-            if (zone.dimension && zone.dimension !== dimension) continue;
-            if (pos.x >= zone.minX && pos.x <= zone.maxX &&
-                pos.y >= zone.minY && pos.y <= zone.maxY &&
-                pos.z >= zone.minZ && pos.z <= zone.maxZ) {
-                return true;
-            }
-        }
-    } catch(e) {}
-    return false;
-}
 
-function _saveQueueCheckpoint(queue) {
-    try {
-        const resumable = queue.filter(a => a && a.action && !NON_RESUMABLE_ACTIONS.has(a.action));
-        if (resumable.length === 0) {
-            // Nothing worth persisting — clear stale checkpoint
-            if (fs.existsSync(QUEUE_CHECKPOINT_FILE)) fs.unlinkSync(QUEUE_CHECKPOINT_FILE);
-            return;
-        }
-        const dir = path.dirname(QUEUE_CHECKPOINT_FILE);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(QUEUE_CHECKPOINT_FILE, JSON.stringify({ savedAt: new Date().toISOString(), queue: resumable }, null, 2));
-    } catch (e) { /* non-fatal */ }
-}
 
-function _loadQueueCheckpoint() {
-    try {
-        if (!fs.existsSync(QUEUE_CHECKPOINT_FILE)) return null;
-        const raw = JSON.parse(fs.readFileSync(QUEUE_CHECKPOINT_FILE, 'utf8'));
-        // Only restore checkpoints that are less than 10 minutes old
-        const age = Date.now() - new Date(raw.savedAt).getTime();
-        if (age > 10 * 60 * 1000) {
-            fs.unlinkSync(QUEUE_CHECKPOINT_FILE);
-            return null;
-        }
-        return Array.isArray(raw.queue) && raw.queue.length > 0 ? raw.queue : null;
-    } catch (e) { return null; }
-}
 
-function _clearQueueCheckpoint() {
-    try { if (fs.existsSync(QUEUE_CHECKPOINT_FILE)) fs.unlinkSync(QUEUE_CHECKPOINT_FILE); } catch (e) {}
-}
 
 // ─── Boat Auto-Selection (Change 1) ──────────────────────────────────────────
 // Returns true if the straight-line path to (destX, destZ) crosses >20 consecutive
 // water blocks, the destination is >40 blocks away, and the bot is not in End/Nether.
-function _shouldUseBoat(destX, destZ) {
-    try {
-        if (!bot.entity) return false;
-        const dim = bot.game?.dimension || 'overworld';
-        if (dim === 'the_nether' || dim === 'minecraft:the_nether' ||
-            dim === 'the_end' || dim === 'minecraft:the_end') {
-            return false;
-        }
-        const cx = bot.entity.position.x, cz = bot.entity.position.z;
-        const dx = destX - cx, dz = destZ - cz;
-        const dist = Math.sqrt(dx * dx + dz * dz);
-        if (dist <= 40) return false;
-        // Sample every 4 blocks along the straight-line path
-        const steps = Math.floor(dist / 4);
-        if (steps === 0) return false;
-        let consecutive = 0;
-        let maxConsecutive = 0;
-        const waterBlockId = bot.registry.blocksByName['water']?.id;
-        for (let i = 0; i <= steps; i++) {
-            const t = i / steps;
-            const sx = cx + dx * t;
-            const sz = cz + dz * t;
-            // Sample at the bot's current Y and Y-1 to detect water surface
-            const bAt = bot.blockAt(new Vec3(Math.floor(sx), Math.floor(bot.entity.position.y), Math.floor(sz)));
-            const bBelow = bot.blockAt(new Vec3(Math.floor(sx), Math.floor(bot.entity.position.y) - 1, Math.floor(sz)));
-            const isWater = (b) => b && (b.name === 'water' || b.name === 'flowing_water' ||
-                                         (waterBlockId !== undefined && b.type === waterBlockId));
-            if (isWater(bAt) || isWater(bBelow)) {
-                consecutive++;
-                if (consecutive > maxConsecutive) maxConsecutive = consecutive;
-            } else {
-                consecutive = 0;
-            }
-        }
-        return maxConsecutive > 20;
-    } catch(e) {
-        return false;
-    }
-}
 
 // ─── Auto-Shredder ────────────────────────────────────────────────────────────
-const JUNK_LIST_FILE = path.join(process.cwd(), 'data', 'junk_list.json');
-const DEFAULT_JUNK_LIST = [
-    'granite', 'diorite', 'andesite', 'tuff', 'calcite',
-    'dirt', 'gravel', 'netherrack', 'rotten_flesh',
-    'poisonous_potato', 'ink_sac'
-];
-let _junkList = new Set(DEFAULT_JUNK_LIST);
 
-function _loadJunkList() {
-    try {
-        if (fs.existsSync(JUNK_LIST_FILE)) {
-            _junkList = new Set(JSON.parse(fs.readFileSync(JUNK_LIST_FILE, 'utf8')));
-        } else {
-            _saveJunkList();
-        }
-    } catch (e) { _junkList = new Set(DEFAULT_JUNK_LIST); }
-}
 
-function _saveJunkList() {
-    try {
-        const dir = path.dirname(JUNK_LIST_FILE);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(JUNK_LIST_FILE, JSON.stringify([..._junkList], null, 2));
-    } catch (e) {}
-}
 
 // Run only when inventory is nearly full (≤4 free slots)
-async function _runAutoShredder() {
-    if (!bot.inventory) return;
-    const items = bot.inventory.items();
-    // Count occupied 36-slot hotbar+main inventory slots
-    const usedSlots = new Set(items.filter(i => i.slot >= 9 && i.slot <= 44).map(i => i.slot)).size;
-    if (usedSlots < 32) return; // plenty of space, nothing to do
-    for (const item of items) {
-        if (_junkList.has(item.name) && item.slot >= 9) {
-            try {
-                await bot.toss(item.type, null, item.count);
-                console.log(`[AutoShredder] Discarded ${item.count}x ${item.name}`);
-            } catch (e) {}
-        }
-    }
-}
 
 _loadJunkList();
 
@@ -2356,207 +1913,17 @@ const DROP_TO_SOURCE = {
     glowstone_dust: ['glowstone'],
 };
 
-function withTimeout(promise, ms, actionName, cancelFn) {
-    let timeoutId;
-    const timeoutPromise = new Promise((_, reject) => {
-        timeoutId = setTimeout(() => {
-            if (cancelFn) cancelFn();
-            reject(new Error(`Timeout exceeded for action: ${actionName} (${ms}ms)`));
-        }, ms);
-    });
-    return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
-}
 
 // Safety check before any blind forward movement.
 // Returns false if lava, fire, magma, or a >3-block cliff lies within 3 steps in angleRad direction.
 // Convention: angleRad = atan2(rdz, rdx) where cos(a)=dX, sin(a)=dZ (matches all movement code).
-function isSafeForward(angleRad) {
-    try {
-        const pos = bot.entity.position;
-        const fdx = Math.cos(angleRad), fdz = Math.sin(angleRad);
-        for (let step = 1; step <= 3; step++) {
-            const bx = Math.floor(pos.x + step * fdx);
-            const bz = Math.floor(pos.z + step * fdz);
-            const by = Math.floor(pos.y);
-            for (let dy = 0; dy <= 1; dy++) {
-                const b = bot.blockAt(new Vec3(bx, by + dy, bz));
-                if (b && (b.name.includes('lava') || b.name.includes('fire') || b.name === 'magma_block')) return false;
-            }
-            // Require solid ground within 3 blocks below to prevent walking off cliffs
-            let hasGround = false;
-            for (let dy = -1; dy >= -3; dy--) {
-                const b = bot.blockAt(new Vec3(bx, by + dy, bz));
-                if (b && b.boundingBox === 'block' && !b.name.includes('lava')) { hasGround = true; break; }
-            }
-            if (!hasGround) return false;
-        }
-        return true;
-    } catch (_) { return false; }
-}
 
-function isAirLikeBlock(b) {
-    if (!b) return true;
-    return b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air';
-}
 
-function isSolidBridgeSupport(b) {
-    if (!b) return false;
-    return b.boundingBox === 'block' && !b.name.includes('water') && !b.name.includes('lava');
-}
 
-function chooseBridgeBlock(preferredName) {
-    const preferredNeedle = (preferredName || '').toLowerCase().trim();
-    const items = bot.inventory.items();
-    if (!items || items.length === 0) return null;
 
-    const blockKeyFromItemName = (rawName) => {
-        const n = (rawName || '').toLowerCase();
-        if (!n) return null;
-        if (bot.registry.blocksByName[n]) return n;
-        const short = n.includes(':') ? n.split(':').pop() : n;
-        if (short && bot.registry.blocksByName[short]) return short;
-        return null;
-    };
-
-    const isClearlyNonPlaceable = (name) => {
-        const n = (name || '').toLowerCase();
-        if (!n) return true;
-        if (n.includes('sword') || n.includes('pickaxe') || n.includes('axe') ||
-            n.includes('shovel') || n.includes('hoe') || n.includes('helmet') ||
-            n.includes('chestplate') || n.includes('leggings') || n.includes('boots') ||
-            n.includes('elytra') || n.includes('jetpack') || n.includes('bow') || n.includes('crossbow') ||
-            n.includes('trident') || n.includes('arrow') || n.includes('bucket') ||
-            n.includes('boat') || n.includes('minecart') || n.includes('food') ||
-            n.includes('potion') || n.includes('torch') || n.includes('rail')) {
-            return true;
-        }
-        return false;
-    };
-
-    const isGoodBridgeBlock = (item) => {
-        const name = (item?.name || '').toLowerCase();
-        if (!name) return false;
-        if (isClearlyNonPlaceable(name)) return false;
-        const hasBlockMapping = !!blockKeyFromItemName(name);
-        if (name.includes('slab') || name.includes('stair') || name.includes('wall') ||
-            name.includes('fence') || name.includes('door') || name.includes('trapdoor') ||
-            name.includes('pane') || name.includes('torch') || name.includes('carpet') ||
-            name.includes('button') || name.includes('pressure_plate') || name.includes('rail') ||
-            name.includes('bucket') || name.includes('bed') || name.includes('boat')) {
-            return false;
-        }
-        // Prefer items known to map to a block, but allow modded unknowns as fallback.
-        return hasBlockMapping || name.includes(':');
-    };
-
-    if (preferredNeedle) {
-        const preferred = items
-            .filter(isGoodBridgeBlock)
-            .filter(i => i.name.toLowerCase().includes(preferredNeedle))
-            .sort((a, b) => b.count - a.count)[0];
-        if (preferred) return preferred;
-    }
-
-    const candidates = items
-        .filter(isGoodBridgeBlock)
-        .sort((a, b) => b.count - a.count);
-
-    if (candidates.length > 0) return candidates[0];
-
-    // Last-resort fallback: try any non-obviously-non-placeable stack, highest count first.
-    const fallback = items
-        .filter(i => !isClearlyNonPlaceable(i?.name))
-        .sort((a, b) => b.count - a.count)[0] || null;
-
-    if (!fallback) {
-        const snapshot = items
-            .slice(0, 12)
-            .map(i => {
-                const n = i?.name || 'unknown';
-                return `${n}x${i?.count || 0}[blk:${blockKeyFromItemName(n) ? 'Y' : 'N'}]`;
-            })
-            .join(', ');
-        console.log(`[Actuator] chooseBridgeBlock: no candidate found. Inventory snapshot: ${snapshot}`);
-    }
-
-    return fallback;
-}
-
-function hasForwardGap(angleRad) {
-    try {
-        const pos = bot.entity.position;
-        const bx = Math.floor(pos.x + Math.cos(angleRad));
-        const bz = Math.floor(pos.z + Math.sin(angleRad));
-        const by = Math.floor(pos.y);
-        const below1 = bot.blockAt(new Vec3(bx, by - 1, bz));
-        const below2 = bot.blockAt(new Vec3(bx, by - 2, bz));
-        return isAirLikeBlock(below1) && isAirLikeBlock(below2);
-    } catch (_) {
-        return false;
-    }
-}
 
 // Broader bridge trigger for edge cases where ground shape confuses hasForwardGap().
-function hasLikelyBridgeNeed(angleRad) {
-    try {
-        const pos = bot.entity.position;
-        const by = Math.floor(pos.y);
-        const ux = Math.cos(angleRad);
-        const uz = Math.sin(angleRad);
-        for (let step = 1; step <= 2; step++) {
-            const bx = Math.floor(pos.x + step * ux);
-            const bz = Math.floor(pos.z + step * uz);
-            const foot = bot.blockAt(new Vec3(bx, by, bz));
-            const below1 = bot.blockAt(new Vec3(bx, by - 1, bz));
-            const below2 = bot.blockAt(new Vec3(bx, by - 2, bz));
-            const below3 = bot.blockAt(new Vec3(bx, by - 3, bz));
-            const noFooting = isAirLikeBlock(foot) && isAirLikeBlock(below1) && isAirLikeBlock(below2);
-            const deepDrop = isAirLikeBlock(below1) && isAirLikeBlock(below2) && isAirLikeBlock(below3);
-            if (noFooting || deepDrop) return true;
-        }
-    } catch (_) {}
-    return false;
-}
 
-async function tryElytraGapCross(angleRad) {
-    try {
-        const torso = bot.inventory.slots[bot.getEquipmentDestSlot('torso')];
-        if (!torso || torso.name !== 'elytra') return false;
-        const rocket = bot.inventory.items().find(i => i.name === 'firework_rocket');
-        if (!rocket) return false;
-
-        bot.pathfinder.setGoal(null);
-        bot.clearControlStates();
-        try { await bot.equip(rocket, 'hand'); } catch (_) {}
-
-        const tx = bot.entity.position.x + 18 * Math.cos(angleRad);
-        const tz = bot.entity.position.z + 18 * Math.sin(angleRad);
-        try { await bot.lookAt(new Vec3(tx, bot.entity.position.y + 2, tz), true); } catch (_) {}
-
-        if (bot.entity.onGround) {
-            bot.setControlState('jump', true);
-            await new Promise(r => setTimeout(r, 220));
-            bot.setControlState('jump', false);
-            await new Promise(r => setTimeout(r, 120));
-        }
-
-        try {
-            if (bot._client && bot.entity?.id !== undefined) {
-                bot._client.write('entity_action', { entityId: bot.entity.id, actionId: 8, jumpBoost: 0 });
-            }
-        } catch (_) {}
-
-        bot.setControlState('forward', true);
-        bot.setControlState('sprint', true);
-        try { bot.activateItem(); } catch (_) {}
-        await new Promise(r => setTimeout(r, 900));
-        bot.setControlState('forward', false);
-        bot.setControlState('sprint', false);
-        return true;
-    } catch (_) {
-        return false;
-    }
-}
 
 // ── Aviation helpers ──────────────────────────────────────────────────────────
 
@@ -2564,45 +1931,12 @@ async function tryElytraGapCross(angleRad) {
 //   'elytra'                             → vanilla Elytra
 //   { type:'jetpack', mod, config }      → modded Jetpack (dynamic dispatch via JETPACK_MOD_REGISTRY)
 //   null                                 → no recognised aviation device
-function detectAviationMethod(torsoItem) {
-    if (!torsoItem) return null;
-    if (torsoItem.name === 'elytra') return 'elytra';
-    const rawName = torsoItem.name || '';
-    const colonIdx = rawName.indexOf(':');
-    const namespace = colonIdx >= 0 ? rawName.slice(0, colonIdx) : null;
-    const localName = colonIdx >= 0 ? rawName.slice(colonIdx + 1) : rawName;
-    // Explicit mod registry lookup.
-    const cfg = namespace ? JETPACK_MOD_REGISTRY[namespace] : null;
-    if (cfg && cfg.itemPattern.test(localName)) {
-        return { type: 'jetpack', mod: namespace, config: cfg };
-    }
-    // Generic fallback — covers any mod whose namespace is not listed above.
-    if (JETPACK_MOD_REGISTRY._generic.itemPattern.test(localName)) {
-        return { type: 'jetpack', mod: namespace || 'unknown', config: JETPACK_MOD_REGISTRY._generic };
-    }
-    return null;
-}
 
 // Helper: send player abilities packet to tell the server the bot is (or is not)
 // flying.  Required to avoid "multiplayer.disconnect.flying" kicks during
 // jetpack flight even when allow-flight=true is set in server.properties.
 // Forge servers still run the vanilla anti-cheat which checks the client-reported
 // flying flag, not just the server property.
-function _setServerFlyingFlag(flying) {
-    try {
-        // flags byte: bit0=invulnerable, bit1=flying, bit2=allowFly, bit3=creative
-        const flags = flying ? 0x06 : 0x00; // 0x02(flying) | 0x04(allowFly)
-        bot._client.write('abilities', {
-            flags,
-            flyingSpeed: flying ? 0.05 : 0.0,
-            walkingSpeed: 0.1,
-        });
-        if (bot.entity && bot.entity.abilities) {
-            bot.entity.abilities.flying = flying;
-            bot.entity.abilities.allowFlight = flying;
-        }
-    } catch (_) { /* non-fatal; packet may not exist on old protocol */ }
-}
 
 // ── Jetpack fuel level reader ─────────────────────────────────────────────────
 // Returns a ratio 0.0 (empty) … 1.0 (full) for the jetpack item in the torso
@@ -2615,76 +1949,6 @@ function _setServerFlyingFlag(flying) {
 //   'nbt_fe'     — traverse fuelNbtPath/fuelNbtMaxPath or common FE key names
 //   'auto'       — try nbt_fe first, then durability
 //   'none'       — always 1.0 (infinite / creative)
-function getJetpackFuelRatio(torsoItem, config) {
-    if (!torsoItem) return 0;
-    const fuelType = config.fuelType || 'auto';
-    if (fuelType === 'none') return 1.0;
-
-    // ── Helper: read a typed NBT value (Mineflayer wraps as {type, value}) ─
-    function _nbtGet(obj, keyPath) {
-        let cur = obj;
-        for (const key of keyPath) {
-            if (cur === null || cur === undefined) return undefined;
-            // Unwrap typed NBT compound/list wrapper
-            if (typeof cur === 'object' && 'value' in cur && typeof cur.value === 'object') cur = cur.value;
-            cur = cur[key];
-        }
-        // Unwrap final typed NBT primitive
-        if (cur !== null && cur !== undefined && typeof cur === 'object' && 'value' in cur) cur = cur.value;
-        return cur;
-    }
-
-    // ── NBT energy read ────────────────────────────────────────────────────
-    if (fuelType === 'nbt_fe' || fuelType === 'auto') {
-        try {
-            const nbtRoot = torsoItem.nbt;
-            if (nbtRoot) {
-                const root = (nbtRoot.value || nbtRoot);
-                let energy = null, maxEnergy = null;
-
-                // 1. Try explicit paths from registry entry
-                if (config.fuelNbtPath) {
-                    energy = _nbtGet(root, config.fuelNbtPath);
-                }
-                if (config.fuelNbtMaxPath) {
-                    maxEnergy = _nbtGet(root, config.fuelNbtMaxPath);
-                }
-
-                // 2. Fall back: probe common FE/RF/pressure key names
-                if (energy === null || energy === undefined) {
-                    for (const k of ['Energy', 'energy', 'Charge', 'RF', 'Air', 'Pressure']) {
-                        const v = _nbtGet(root, [k]);
-                        if (typeof v === 'number') { energy = v; break; }
-                    }
-                }
-                if (maxEnergy === null || maxEnergy === undefined) {
-                    for (const k of ['MaxEnergy', 'maxEnergy', 'MaxCharge', 'MaxRF', 'MaxAir', 'MaxPressure', 'Capacity', 'capacity']) {
-                        const v = _nbtGet(root, [k]);
-                        if (typeof v === 'number') { maxEnergy = v; break; }
-                    }
-                }
-
-                if (typeof energy === 'number' && typeof maxEnergy === 'number' && maxEnergy > 0) {
-                    return Math.max(0, Math.min(1, energy / maxEnergy));
-                }
-                // Partial info: energy known but max unknown → estimate via item max durability
-                if (typeof energy === 'number' && energy === 0) return 0; // definitely empty
-            }
-        } catch (_) { /* NBT parse error — fall through to durability */ }
-        if (fuelType === 'nbt_fe') {
-            // Explicit nbt_fe but read failed — optimistically return 0.5 so flight
-            // isn't blocked, but log a warning.
-            console.warn(`[Actuator] getJetpackFuelRatio: could not read NBT energy for ${torsoItem.name}; assuming 50%.`);
-            return 0.5;
-        }
-    }
-
-    // ── Durability fallback ────────────────────────────────────────────────
-    const maxDur = torsoItem.maxDurability;
-    if (!maxDur || maxDur <= 0) return 1.0; // unbreakable → no durability → infinite
-    const damage = torsoItem.durabilityUsed || 0;
-    return Math.max(0, Math.min(1, (maxDur - damage) / maxDur));
-}
 
 // Fly to (destX, destY, destZ) using any modded jetpack.
 //
@@ -2713,958 +1977,55 @@ function getJetpackFuelRatio(torsoItem, config) {
 // 2    Horizontal navigation + altitude PID + per-5s fuel monitor.
 // 3    Safe descent: sneak held + slow-fall physicsTick override → no fall
 //      damage.  Toggle OFF for B-mods.  Report fuel status to AgentManager.
-async function flyWithJetpack(destX, destY, destZ, config, cancelToken) {
-    const targetY      = destY !== null ? destY : bot.entity.position.y;
-    const actMethod    = config.activateMethod || 'auto';
-    const hoverMode    = !!config.hoverMode;
-    const fuelLow      = config.fuelLow      ?? 0.20; // warn threshold
-    const fuelCritical = config.fuelCritical ?? 0.05; // abort threshold
-
-    // ── Helper: read current fuel from the torso slot ─────────────────────
-    const _torsoIdx = () => bot.getEquipmentDestSlot('torso');
-    const _fuelNow  = () => getJetpackFuelRatio(bot.inventory.slots[_torsoIdx()], config);
-
-    // ── PRE: Fuel check before starting ──────────────────────────────────
-    const preFuel = _fuelNow();
-    if (preFuel <= fuelCritical) {
-        const pct = Math.round(preFuel * 100);
-        bot.chat(`[System Error] Jetpack fuel critically low (${pct}%) — refusing to fly. Refuel first.`);
-        process.send({ type: 'USER_CHAT', data: {
-            username: 'System',
-            message: `Jetpack fuel is at ${pct}% (below ${Math.round(fuelCritical*100)}% critical threshold). ` +
-                     `Cannot fly safely. Please refuel the ${bot.inventory.slots[_torsoIdx()]?.name || 'jetpack'}.`,
-            environment: getEnvironmentContext(),
-        }});
-        return;
-    }
-    if (preFuel <= fuelLow) {
-        bot.chat(`[System] Warning: Jetpack fuel low (${Math.round(preFuel*100)}%). Proceeding with caution.`);
-    }
-
-    bot.chat(`[System] Jetpack engaging — heading to X:${Math.round(destX)} Y:${Math.round(targetY)} Z:${Math.round(destZ)}.`);
-    bot.pathfinder.setGoal(null);
-    bot.clearControlStates();
-
-    // Tell the server the client is flying (prevents vanilla anti-cheat kicks
-    // even on allow-flight=true servers; client abilities packet must report
-    // flying=true).
-    _setServerFlyingFlag(true);
-    await new Promise(r => setTimeout(r, 100));
-
-    // ── Phase 0: Pre-flight activation ───────────────────────────────────────
-    // Category B mods require right-click to toggle ON before jump detection.
-    if (actMethod === 'right_click') {
-        try { bot.activateItem(); } catch (_) {}
-        await new Promise(r => setTimeout(r, 350));
-    }
-
-    // ── Physics override (universal) ─────────────────────────────────────────
-    // Overwrite velocity.y every tick to replace gravity with controlled thrust.
-    let _flyPhase = 'ascend'; // 'ascend' | 'cruise' | 'descend' | 'done'
-    const _flyTick = () => {
-        if (_flyPhase === 'done') return;
-        const diff = targetY - bot.entity.position.y;
-        if (_flyPhase === 'ascend') {
-            if (diff > 0.5) {
-                bot.entity.velocity.y = 0.28; // net +0.20 b/tick after gravity
-            } else {
-                _flyPhase = 'cruise';
-                bot.entity.velocity.y = 0;
-            }
-        } else if (_flyPhase === 'cruise') {
-            // Proportional altitude hold (works for hover and non-hover mods).
-            bot.entity.velocity.y = Math.max(-0.12, Math.min(0.18, diff * 0.18));
-        } else if (_flyPhase === 'descend') {
-            // Controlled descent: cap downward speed so most mods' fall-damage
-            // prevention (sneak-hold) has time to engage server-side.
-            bot.entity.velocity.y = Math.max(-0.15, bot.entity.velocity.y);
-        }
-    };
-
-    bot.on('physicsTick', _flyTick);
-    bot.setControlState('jump', true); // propagates as jump=true in player_input (0x16)
-    await new Promise(r => setTimeout(r, 200));
-
-    // ── Phase 1: Ascend ───────────────────────────────────────────────────────
-    const riseDeadline = Date.now() + 20000;
-    let _stallMs    = 0;
-    let _lastY      = bot.entity.position.y;
-    let _recoveries = 0;
-
-    while (bot.entity.position.y < targetY - 0.5 && Date.now() < riseDeadline && !cancelToken.cancelled) {
-        await new Promise(r => setTimeout(r, 100));
-        const dy = bot.entity.position.y - _lastY;
-        _lastY = bot.entity.position.y;
-
-        // ── In-flight fuel check (every tick during ascent) ───────────────
-        const fuel = _fuelNow();
-        if (fuel <= fuelCritical) {
-            bot.chat(`[System] Jetpack fuel critical (${Math.round(fuel*100)}%) mid-flight — aborting ascent!`);
-            break;
-        }
-
-        if (dy < 0.01) {
-            _stallMs += 100;
-            // ── Universal stall recovery ──────────────────────────────────
-            if (_stallMs >= 3000 && _recoveries < 2) {
-                if (actMethod === 'auto' || actMethod === 'right_click') {
-                    bot.chat('[System] Jetpack stall — retrying activation toggle.');
-                    try { bot.activateItem(); } catch (_) {}
-                    _recoveries++;
-                } else {
-                    bot.chat('[System] Jetpack not ascending — possible fuel exhaustion.');
-                    break;
-                }
-                _stallMs = 0;
-            }
-        } else {
-            _stallMs = 0;
-        }
-    }
-
-    // ── Phase 2: Horizontal navigation ───────────────────────────────────────
-    _flyPhase = 'cruise';
-    if (hoverMode) bot.setControlState('jump', false);
-    bot.setControlState('forward', true);
-    bot.setControlState('sprint', true);
-
-    const horizDeadline = Date.now() + 90000;
-    let _lastFuelCheck  = Date.now();
-
-    while (Date.now() < horizDeadline && !cancelToken.cancelled) {
-        const dx = destX - bot.entity.position.x;
-        const dz = destZ - bot.entity.position.z;
-        if (Math.sqrt(dx * dx + dz * dz) < 3) break;
-
-        // ── In-flight fuel check (every 5 s during cruise) ────────────────
-        if (Date.now() - _lastFuelCheck >= 5000) {
-            _lastFuelCheck = Date.now();
-            const fuel = _fuelNow();
-            if (fuel <= fuelCritical) {
-                bot.chat(`[System] Jetpack fuel critical (${Math.round(fuel*100)}%) — aborting flight!`);
-                break;
-            }
-            if (fuel <= fuelLow) {
-                bot.chat(`[System] Jetpack fuel low (${Math.round(fuel*100)}%) — returning soon.`);
-            }
-        }
-
-        // hoverMode: tap jump to correct altitude sag; _flyTick handles non-hover.
-        if (hoverMode && bot.entity.position.y < targetY - 1.5) {
-            bot.setControlState('jump', true);
-            await new Promise(r => setTimeout(r, 150));
-            bot.setControlState('jump', false);
-        }
-        try { await bot.lookAt(new Vec3(destX, bot.entity.position.y, destZ), true); } catch (_) {}
-        await new Promise(r => setTimeout(r, 150));
-    }
-
-    // ── Phase 3: Safe descent ─────────────────────────────────────────────────
-    // Hold sneak so server-side mod engages fall-damage prevention / hover mode.
-    // physicsTick 'descend' phase caps downward velocity to a safe speed while
-    // sneak is held (most mods cap fall speed when sneak+airborne).
-    _flyPhase = 'descend';
-    bot.setControlState('forward', false);
-    bot.setControlState('sprint', false);
-    bot.setControlState('jump', false);
-    bot.setControlState('sneak', true); // triggers soft-landing on most jetpacks
-
-    // Toggle OFF for right-click mods.
-    if (actMethod === 'right_click' || (actMethod === 'auto' && _recoveries > 0)) {
-        try { bot.activateItem(); } catch (_) {}
-        await new Promise(r => setTimeout(r, 200));
-    }
-    _setServerFlyingFlag(false);
-
-    const landDeadline = Date.now() + 12000;
-    while (!bot.entity.onGround && Date.now() < landDeadline && !cancelToken.cancelled) {
-        await new Promise(r => setTimeout(r, 100));
-    }
-
-    // Clean up
-    _flyPhase = 'done';
-    bot.removeListener('physicsTick', _flyTick);
-    bot.clearControlStates();
-
-    // ── Post-flight fuel report ───────────────────────────────────────────────
-    const postFuel = _fuelNow();
-    const postPct  = Math.round(postFuel * 100);
-    const jetpackName = bot.inventory.slots[_torsoIdx()]?.name || 'jetpack';
-    if (postFuel <= fuelCritical) {
-        // Report to AgentManager so the LLM can look up refueling instructions
-        // via wiki RAG if needed.
-        process.send({ type: 'USER_CHAT', data: {
-            username: 'System',
-            message: `Jetpack (${jetpackName}) fuel critically low after landing: ${postPct}%. ` +
-                     `Refuel before next flight.`,
-            environment: getEnvironmentContext(),
-        }});
-    } else if (postFuel <= fuelLow) {
-        bot.chat(`[System] Jetpack fuel at ${postPct}% after landing. Consider refueling soon.`);
-    }
-}
 
 // Fly to (destX, destY, destZ) using an Elytra + firework rockets.
 // Launches into glide, fires a rocket for propulsion, and steers toward the destination.
-async function flyWithElytra(destX, destY, destZ, cancelToken) {
-    const rocket = bot.inventory.items().find(i => i.name === 'firework_rocket');
-    if (!rocket) {
-        bot.chat('[System Error] No firework rockets — cannot launch Elytra.');
-        return false;
-    }
 
-    bot.chat(`[System] Elytra launch — heading to X:${Math.round(destX)} Y:${Math.round(destY)} Z:${Math.round(destZ)}.`);
-    bot.pathfinder.setGoal(null);
-    bot.clearControlStates();
 
-    try { await bot.lookAt(new Vec3(destX, destY, destZ), true); } catch (_) {}
 
-    // Jump → open Elytra (entity_action id 8) → rocket boost.
-    if (bot.entity.onGround) {
-        bot.setControlState('jump', true);
-        await new Promise(r => setTimeout(r, 220));
-        bot.setControlState('jump', false);
-        await new Promise(r => setTimeout(r, 120));
-    }
-    try {
-        if (bot._client && bot.entity?.id !== undefined) {
-            bot._client.write('entity_action', { entityId: bot.entity.id, actionId: 8, jumpBoost: 0 });
-        }
-    } catch (_) {}
-    try { await bot.equip(rocket, 'hand'); } catch (_) {}
-    bot.setControlState('forward', true);
-    bot.setControlState('sprint', true);
-    try { bot.activateItem(); } catch (_) {}
-
-    // Glide toward destination, re-boosting when speed drops.
-    const deadline = Date.now() + 90000;
-    while (Date.now() < deadline && !cancelToken.cancelled) {
-        const dx = destX - bot.entity.position.x;
-        const dz = destZ - bot.entity.position.z;
-        if (Math.sqrt(dx * dx + dz * dz) < 5) break;
-        try { await bot.lookAt(new Vec3(destX, destY, destZ), true); } catch (_) {}
-        const vel = bot.entity.velocity;
-        const speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
-        if (speed < 0.3) {
-            const r2 = bot.inventory.items().find(i => i.name === 'firework_rocket');
-            if (r2) { try { await bot.equip(r2, 'hand'); bot.activateItem(); } catch (_) {} }
-        }
-        await new Promise(r => setTimeout(r, 500));
-    }
-
-    bot.setControlState('forward', false);
-    bot.setControlState('sprint', false);
-    const landDeadline = Date.now() + 10000;
-    while (!bot.entity.onGround && Date.now() < landDeadline && !cancelToken.cancelled) {
-        await new Promise(r => setTimeout(r, 100));
-    }
-    bot.clearControlStates();
-    return true;
-}
-
-async function tryBridgeForward(angleRad, preferredName, maxPlacements = 3) {
-    _lastBridgeFailureReason = null;
-    const bridgeBlock = chooseBridgeBlock(preferredName);
-    if (!bridgeBlock) {
-        _lastBridgeFailureReason = 'no_block';
-        bot.chat('[System Error] Cannot bridge: no placeable blocks in inventory.');
-        return false;
-    }
-
-    // Stop pathfinder and all movement during placement to prevent bot from
-    // walking into the void while awaiting async placeBlock calls.
-    bot.pathfinder.setGoal(null);
-    bot.clearControlStates();
-    bot.setControlState('sneak', true);
-
-    try {
-        await bot.equip(bridgeBlock, 'hand');
-    } catch (_) { /* equip might fail if already holding it */ }
-
-    const base = bot.entity.position;
-    const by = Math.floor(base.y);
-    const ux = Math.cos(angleRad);
-    const uz = Math.sin(angleRad);
-
-    // Prioritise the face pointing back toward the bot (toward source solid ground).
-    // For axis-aligned cardinal movement, the dominant backward cardinal face is tried first.
-    // Then all other standard faces are tried as fallbacks.
-    const dominantFace = () => {
-        // Pick the axis with the larger component and invert it (backward direction).
-        if (Math.abs(ux) >= Math.abs(uz)) {
-            return new Vec3(ux > 0 ? -1 : 1, 0, 0);
-        }
-        return new Vec3(0, 0, uz > 0 ? -1 : 1);
-    };
-    const df = dominantFace();
-    const backwardFaces = [
-        df,
-        new Vec3(1, 0, 0),
-        new Vec3(-1, 0, 0),
-        new Vec3(0, 0, 1),
-        new Vec3(0, 0, -1),
-        new Vec3(0, 1, 0),
-        new Vec3(0, -1, 0),
-    ].filter((f, i, arr) =>
-        i === 0 || !(f.x === arr[0].x && f.y === arr[0].y && f.z === arr[0].z)
-    );
-
-    let placedCount = 0;
-    for (let step = 1; step <= maxPlacements; step++) {
-        const tx = Math.floor(base.x + step * ux);
-        const tz = Math.floor(base.z + step * uz);
-        const target = new Vec3(tx, by - 1, tz);
-        const existing = bot.blockAt(target);
-        if (isSolidBridgeSupport(existing)) { placedCount++; continue; }
-
-        let placed = false;
-        for (const face of backwardFaces) {
-            const refPos = target.minus(face);
-            const refBlock = bot.blockAt(refPos);
-            if (!isSolidBridgeSupport(refBlock)) continue;
-            try {
-                await withTimeout(bot.placeBlock(refBlock, face), 3000, 'bridge place');
-                placed = true;
-                placedCount++;
-                break;
-            } catch (_) {
-                // Try next face
-            }
-        }
-
-        if (!placed) break; // Can't place this step — stop here
-        await new Promise(r => setTimeout(r, 150));
-    }
-
-    bot.setControlState('sneak', false);
-    if (placedCount > 0) return true;
-    _lastBridgeFailureReason = 'placement_failed';
-    return false;
-}
-
-function _shortItemName(name) {
-    if (!name) return '';
-    const n = String(name).toLowerCase();
-    return n.includes(':') ? n.split(':').pop() : n;
-}
-
-function resolveInventoryItemForTarget(targetName) {
-    const wanted = String(targetName || '').toLowerCase().trim();
-    if (!wanted) return null;
-    const wantedShort = _shortItemName(wanted);
-    const inventory = bot.inventory.items();
-    if (!inventory.length) return null;
-
-    let exact = inventory.find(i => String(i.name || '').toLowerCase() === wanted);
-    if (exact) return exact;
-    exact = inventory.find(i => _shortItemName(i.name) === wantedShort);
-    if (exact) return exact;
-
-    let fuzzy = inventory.find(i => String(i.name || '').toLowerCase().includes(wanted));
-    if (fuzzy) return fuzzy;
-    fuzzy = inventory.find(i => _shortItemName(i.name).includes(wantedShort));
-    return fuzzy || null;
-}
 
 let debouncer = null; // initialized in 'spawn' — used for VeinMiner cascade detection
 
 // ─── Module-level helpers ─────────────────────────────────────────────────────
 
-async function placeItemIntelligently(bot, itemToPlace, timeoutMs) {
-    const refs = bot.findBlocks({
-        matching: b => b && b.name !== 'air' && b.name !== 'water' && b.name !== 'lava' && b.boundingBox === 'block',
-        maxDistance: 4,
-        count: 50
-    });
 
-    refs.sort((a, b) => bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b));
 
-    const botPos = bot.entity.position;
 
-    // 1. Try to find a block nearby that doesn't intersect the bot
-    for (const refPos of refs) {
-        const placePos = refPos.offset(0, 1, 0);
-        const blockAbove = bot.blockAt(placePos);
-
-        if (blockAbove && blockAbove.name === 'air') {
-            const dx = Math.abs(botPos.x - (placePos.x + 0.5));
-            const dz = Math.abs(botPos.z - (placePos.z + 0.5));
-            const dy = placePos.y - botPos.y;
-
-            const intersectsBot = dx < 0.8 && dz < 0.8 && dy > -1 && dy < 2;
-
-            if (!intersectsBot) {
-                const refBlock = bot.blockAt(refPos);
-                try {
-                    await bot.equip(itemToPlace, 'hand');
-                    const promise = bot.placeBlock(refBlock, new Vec3(0, 1, 0));
-                    if (timeoutMs) {
-                        await withTimeout(promise, timeoutMs, 'place block');
-                    } else {
-                        await promise;
-                    }
-                    return true;
-                } catch(e) {
-                    console.log(`[Actuator] Intelligent place failed at ${refPos}: ${e.message}`);
-                }
-            }
-        }
-    }
-
-    // 2. Fallback: Jump place directly under the bot
-    try {
-        const botFloored = bot.entity.position.floored();
-        const blockBelow = bot.blockAt(botFloored.offset(0, -1, 0));
-        if (blockBelow && blockBelow.boundingBox === 'block') {
-            await bot.equip(itemToPlace, 'hand');
-            bot.setControlState('jump', true);
-            await new Promise(r => setTimeout(r, 250)); // wait to reach peak jump
-            const promise = bot.placeBlock(blockBelow, new Vec3(0, 1, 0));
-            bot.setControlState('jump', false);
-            if (timeoutMs) {
-                await withTimeout(promise, timeoutMs, 'jump place block');
-            } else {
-                await promise;
-            }
-            return true;
-        }
-    } catch(e) {
-        bot.setControlState('jump', false);
-        console.log(`[Actuator] Jump place failed: ${e.message}`);
-    }
-
-    throw new Error('No valid location to place block');
-}
-
-const TOOL_SUFFIXES = ['_pickaxe', '_axe', '_shovel', '_hoe', '_sword', '_shears'];
-async function equipBestTool(block) {
-    // Only compare genuine tools — never equip decorative items (beds, lecterns, slabs) as a
-    // "tool" just because they tie with bare-hands on the dig-time comparison.
-    const toolItems = bot.inventory.items().filter(i => TOOL_SUFFIXES.some(s => i.name.endsWith(s)));
-    // Baseline: bare-hand dig time; only equip a tool if it beats that.
-    let bestTool = null, bestTime = block.digTime(null, false, false, false, [], bot.entity.effects);
-    for (const tool of toolItems) {
-        const t = block.digTime(tool.type, false, false, false, [], bot.entity.effects);
-        if (t < bestTime) { bestTime = t; bestTool = tool; }
-    }
-    if (bestTool) {
-        try { await bot.equip(bestTool, 'hand'); } catch (e) {
-            console.log(`[Actuator] equipBestTool: ${e.message}`);
-        }
-    }
-}
-
-const WEAPON_PRIORITY = [
-    'netherite_axe', 'diamond_axe', 'iron_axe', 'netherite_sword', 'diamond_sword', 'iron_sword',
-    'stone_axe', 'stone_sword', 'wooden_axe', 'wooden_sword', 'golden_axe', 'golden_sword'
-];
-async function equipBestWeapon() {
-    for (const name of WEAPON_PRIORITY) {
-        const w = bot.inventory.items().find(i => i.name === name);
-        if (w) { try { await bot.equip(w, 'hand'); } catch (e) {} break; }
-    }
-    const shield = bot.inventory.items().find(i => i.name === 'shield');
-    if (shield) {
-        try { await bot.equip(shield, 'off-hand'); } catch (e) {}
-    }
-}
-
-const ARMOR_TIERS = ['netherite', 'diamond', 'iron', 'golden', 'chainmail', 'leather'];
-const ARMOR_PIECES = { head: 'helmet', torso: 'chestplate', legs: 'leggings', feet: 'boots' };
-async function equipBestArmor() {
-    for (const [slot, piece] of Object.entries(ARMOR_PIECES)) {
-        const destSlot = bot.getEquipmentDestSlot(slot);
-        const currentEquipped = bot.inventory.slots[destSlot];
-        // Keep Elytra or any jetpack equipped unless explicitly swapped by a direct equip action.
-        if (slot === 'torso' && detectAviationMethod(currentEquipped)) continue;
-        // Index of currently equipped tier (lower = better; ARMOR_TIERS.length = nothing equipped)
-        const currentTierIdx = currentEquipped
-            ? ARMOR_TIERS.findIndex(t => currentEquipped.name === `${t}_${piece}`)
-            : ARMOR_TIERS.length;
-        const effectiveIdx = currentTierIdx === -1 ? ARMOR_TIERS.length : currentTierIdx;
-
-        for (let i = 0; i < effectiveIdx; i++) {
-            const a = bot.inventory.items().find(itm => itm.name === `${ARMOR_TIERS[i]}_${piece}`);
-            if (a) {
-                try {
-                    if (currentEquipped) await bot.unequip(slot);
-                    await bot.equip(a, slot);
-                } catch (e) {}
-                break;
-            }
-        }
-    }
-}
 
 // ─── Equipment-chest helpers ──────────────────────────────────────────────────
 
 /** True if any armor slot is empty or no weapon exists in inventory. */
-function isMissingGear() {
-    for (const slot of ['head', 'torso', 'legs', 'feet']) {
-        const eq = bot.inventory.slots[bot.getEquipmentDestSlot(slot)];
-        if (!eq) return true;
-    }
-    return !WEAPON_PRIORITY.some(name => bot.inventory.items().find(i => i.name === name));
-}
 
 /** Block IDs for every equipment-container type: chest, barrel, and all shulker-box colours. */
-function getEquipmentContainerIds() {
-    const ids = [];
-    const reg = bot.registry.blocksByName;
-    for (const name of ['chest', 'barrel']) {
-        if (reg[name]?.id !== undefined) ids.push(reg[name].id);
-    }
-    for (const key of Object.keys(reg)) {
-        if (key === 'shulker_box' || key.endsWith('_shulker_box')) ids.push(reg[key].id);
-    }
-    return ids;
-}
 
-function _normalizeContainerKind(raw) {
-    const t = String(raw || '').toLowerCase();
-    if (t.includes('shulker') || t.includes('シュルカー')) return 'shulker';
-    if (t.includes('barrel') || t.includes('バレル')) return 'barrel';
-    if (t.includes('chest') || t.includes('チェスト') || t.includes('箱')) return 'chest';
-    return 'container';
-}
 
-function _normalizeItemTargetName(raw) {
-    const text = String(raw || '').toLowerCase().trim();
-    if (!text) return '';
-    const aliases = [
-        { re: /(滑らかな石|smooth[_\s-]?stone|smoothstone)/i, id: 'smooth_stone' },
-        { re: /(丸石|cobblestone|cobble)/i, id: 'cobblestone' },
-        { re: /(石|stone)/i, id: 'stone' },
-        { re: /(原木|log)/i, id: 'oak_log' }
-    ];
-    for (const a of aliases) {
-        if (a.re.test(text)) return a.id;
-    }
-    return text.replace(/[\s-]+/g, '_');
-}
 
-function _isContainerBlockByName(name) {
-    const n = String(name || '').toLowerCase();
-    return n === 'chest' || n === 'trapped_chest' || n === 'barrel' ||
-           n === 'shulker_box' || n.endsWith('_shulker_box');
-}
 
-function _getContainerBlockIds(kind = 'container') {
-    const reg = bot.registry.blocksByName || {};
-    const ids = new Set();
-    const k = _normalizeContainerKind(kind);
-    for (const [name, info] of Object.entries(reg)) {
-        if (!info || info.id === undefined) continue;
-        const n = String(name || '').toLowerCase();
-        if (k === 'chest' && (n === 'chest' || n === 'trapped_chest')) ids.add(info.id);
-        else if (k === 'barrel' && n === 'barrel') ids.add(info.id);
-        else if (k === 'shulker' && (n === 'shulker_box' || n.endsWith('_shulker_box'))) ids.add(info.id);
-        else if (k === 'container' && _isContainerBlockByName(n)) ids.add(info.id);
-    }
-    return [...ids];
-}
 
-function _resolveContainerCoords(action) {
-    const candidates = _listContainerCandidates(action);
-    return candidates.length > 0 ? candidates[0] : null;
-}
 
-function _listContainerCandidates(action) {
-    const hasExplicit = [action.x, action.y, action.z].every(v => v !== undefined && v !== null && Number.isFinite(Number(v)));
-    if (hasExplicit) {
-        return [{ x: Number(action.x), y: Number(action.y), z: Number(action.z), via: 'explicit' }];
-    }
 
-    const kind = _normalizeContainerKind(action.container || action.target || 'container');
-    const requestedMax = Number.isFinite(Number(action.distance)) ? Number(action.distance) : 96;
-    const maxDistance = Math.max(16, Math.min(192, requestedMax));
-    const ids = _getContainerBlockIds(kind);
-    if (ids.length === 0) return [];
 
-    const positions = [];
-    const seen = new Set();
-    const radii = [Math.min(32, maxDistance), Math.min(64, maxDistance), Math.min(96, maxDistance), maxDistance]
-        .filter((v, i, arr) => v > 0 && arr.indexOf(v) === i)
-        .sort((a, b) => a - b);
-    for (const r of radii) {
-        const found = bot.findBlocks({ matching: ids, maxDistance: r, count: 256 }) || [];
-        for (const p of found) {
-            const key = `${p.x},${p.y},${p.z}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            positions.push(p);
-        }
-        // Collect more than one candidate so actions can continue when first chest misses.
-        if (positions.length >= 8) break;
-    }
-    if (!positions.length) return [];
 
-    return positions
-        .map(p => ({
-            x: p.x,
-            y: p.y,
-            z: p.z,
-            via: `nearest_${kind}`,
-            _dist: bot.entity.position.distanceTo(new Vec3(p.x, p.y, p.z))
-        }))
-        .sort((a, b) => a._dist - b._dist)
-        .map(({ _dist, ...rest }) => rest);
-}
-
-function _resolveTargetItemIds(itemTargetName) {
-    const normalized = _normalizeItemTargetName(itemTargetName);
-    const ids = [];
-    const targetGroup = MATERIAL_TAG_GROUPS[normalized];
-    if (targetGroup) {
-        for (const n of targetGroup) {
-            const id = bot.registry.itemsByName[n]?.id || bot.registry.blocksByName[n]?.id;
-            if (id !== undefined) ids.push(id);
-        }
-    } else {
-        const id = bot.registry.itemsByName[normalized]?.id || bot.registry.blocksByName[normalized]?.id;
-        if (id !== undefined) ids.push(id);
-    }
-    return ids;
-}
-
-async function _withdrawFromOpenedContainer(containerWindow, neededIds, quantity) {
-    let taken = 0;
-    while (taken < quantity && !currentCancelToken.cancelled) {
-        const currentItems = containerWindow.containerItems();
-        const match = currentItems.find(i => neededIds.includes(i.type));
-        if (!match) break;
-        const amountToTake = Math.min(match.count, quantity - taken);
-        try {
-            await containerWindow.withdraw(match.type, null, amountToTake);
-            taken += amountToTake;
-        } catch (_) {
-            break;
-        }
-    }
-    return taken;
-}
-
-async function _depositToOpenedContainer(containerWindow, neededIds, quantity, itemTargetName) {
-    let moved = 0;
-    while (moved < quantity && !currentCancelToken.cancelled) {
-        const inv = bot.inventory.items();
-        const stack = inv.find(i => neededIds.includes(i.type)) ||
-            inv.find(i => String(i.name || '').toLowerCase().includes(String(itemTargetName || '').toLowerCase()));
-        if (!stack) break;
-        const amount = Math.min(stack.count, quantity - moved);
-        try {
-            await containerWindow.deposit(stack.type, null, amount);
-            moved += amount;
-        } catch (_) {
-            break;
-        }
-    }
-    return moved;
-}
 
 /**
  * From an already-open container window take at most 1 of each tool/weapon and
  * 1 of each armor piece that the bot is currently missing.  Returns items taken.
  */
-async function withdrawNeededEquipment(containerWindow) {
-    const equippedNames = new Set(
-        ['head', 'torso', 'legs', 'feet']
-            .map(s => bot.inventory.slots[bot.getEquipmentDestSlot(s)]?.name)
-            .filter(Boolean)
-    );
-    // Use a mutable set so items taken during this session are not taken again
-    const alreadyHaveNames = new Set(bot.inventory.items().map(i => i.name));
-    let taken = 0;
-    for (const item of containerWindow.containerItems()) {
-        if (currentCancelToken.cancelled) break;
-        const name = item.name;
-        const isGear =
-            TOOL_SUFFIXES.some(s => name.endsWith(s)) ||
-            ARMOR_TIERS.some(t => Object.values(ARMOR_PIECES).some(p => name === `${t}_${p}`));
-        if (!isGear) continue;
-        if (equippedNames.has(name)) continue;
-        if (alreadyHaveNames.has(name)) continue;
-        try {
-            await containerWindow.withdraw(item.type, null, 1);
-            alreadyHaveNames.add(name); // Prevent taking a second copy this session
-            taken++;
-        } catch (e) {}
-    }
-    return taken;
-}
 
-function getBestFoodItem() {
-    const foods = mcData.foodsArray || [];
-    const sorted = [...foods].sort((a, b) => b.foodPoints - a.foodPoints);
-    for (const food of sorted) {
-        const item = bot.inventory.items().find(i => i.name === food.name);
-        if (item) return item;
-    }
-    return null;
-}
 
 // FIX: Improved inferToolCategory — also detects log-type blocks for axe suggestion
-function inferToolCategory(block) {
-    const name = block.name.toLowerCase();
 
-    // Issue 5: Ensure graves use pickaxes to break properly
-    if (name.includes('grave') || name.includes('tomb') || name.includes('crave') || name.includes('obituary') || name.includes('death')) {
-        return 'pickaxe';
-    }
-
-    if (name.includes('log') || name.includes('_wood') || name.includes('plank') ||
-        name.includes('bamboo_block') || name.includes('bamboo_mosaic') ||
-        name.includes('fence') || name.includes('stem') || name.includes('hyphae') ||
-        name.includes('chest') || name.includes('barrel') || name.includes('bookshelf') ||
-        name.includes('crafting_table') || name.includes('jukebox') || name.includes('note_block') ||
-        name.includes('door') || name.includes('trapdoor')) {
-        return 'axe';
-    }
-    if (name.includes('dirt') || name.includes('gravel') || name.includes('sand') ||
-        name.includes('grass') || name.includes('podzol') || name.includes('mycelium') ||
-        name.includes('soul_sand') || name.includes('soul_soil') || name.includes('clay') ||
-        name.includes('farmland') || name.includes('path') || name.includes('snow') ||
-        name.includes('mud')) {
-        return 'shovel';
-    }
-    // Stone, ore, concrete, bricks, etc.
-    return 'pickaxe';
-}
-
-const PLANK_NAMES = new Set([
-    'oak_planks', 'spruce_planks', 'birch_planks', 'jungle_planks',
-    'acacia_planks', 'dark_oak_planks', 'mangrove_planks', 'cherry_planks', 'bamboo_planks'
-]);
-const LOG_NAMES = new Set([
-    'oak_log', 'spruce_log', 'birch_log', 'jungle_log', 'acacia_log',
-    'dark_oak_log', 'mangrove_log', 'cherry_log',
-    'oak_wood', 'spruce_wood', 'birch_wood', 'jungle_wood', 'acacia_wood',
-    'dark_oak_wood', 'mangrove_wood', 'cherry_wood',
-    // Bamboo (1.20+): bamboo_block is the log-equivalent, bamboo is the plant item
-    'bamboo_block', 'stripped_bamboo_block',
-]);
 
 // ── Material Tag Groups ─────────────────────────────────────────────────────
 // When the bot can't find the exact requested item (e.g. "oak_log" in a birch
 // forest), it falls back to any member of the same tag group. This prevents the
 // "cannot find Oak logs" failure when other log types are available nearby.
 // Issue 9: Use tags instead of hardcoded specific item names.
-const _LOG_LIST   = [...LOG_NAMES];
-const _PLANK_LIST = [...PLANK_NAMES];
-const MATERIAL_TAG_GROUPS = {
-    // Any log variant satisfies a request for any specific log type
-    oak_log:         _LOG_LIST, spruce_log:    _LOG_LIST, birch_log:     _LOG_LIST,
-    jungle_log:      _LOG_LIST, acacia_log:    _LOG_LIST, dark_oak_log:  _LOG_LIST,
-    mangrove_log:    _LOG_LIST, cherry_log:    _LOG_LIST, oak_wood:      _LOG_LIST,
-    bamboo_block:    _LOG_LIST, stripped_bamboo_block: _LOG_LIST,
-    // Any plank variant satisfies a request for any specific plank type
-    oak_planks:     _PLANK_LIST, spruce_planks:   _PLANK_LIST, birch_planks:    _PLANK_LIST,
-    jungle_planks:  _PLANK_LIST, acacia_planks:   _PLANK_LIST, dark_oak_planks: _PLANK_LIST,
-    mangrove_planks:_PLANK_LIST, cherry_planks:   _PLANK_LIST, bamboo_planks:   _PLANK_LIST,
-    // Stone variants
-    stone:       ['stone', 'andesite', 'granite', 'diorite', 'tuff', 'calcite', 'deepslate'],
-    andesite:    ['stone', 'andesite', 'granite', 'diorite'],
-    cobblestone: ['cobblestone', 'stone'],
-};
 
 // If a block strictly requires a harvest tool, ensureToolFor may obtain/craft one.
 // For optional speed tools (for example axes for logs), we prefer to continue
 // bare-handed rather than trigger long auto-craft/pathing sequences that can
 // disconnect the bot on unstable terrain or busy Forge servers.
-async function ensureToolFor(block) {
-    // Skip fluids, air, and any block the registry marks as non-diggable.
-    // Calling this for water/lava would fall through to the default 'pickaxe'
-    // branch and trigger an expensive (and fatal-OOM) auto-craft loop.
-    if (!block) return;
-    const bname = block.name || '';
-    if (bname === 'air' || bname.includes('water') || bname.includes('lava') ||
-        bname === 'void_air' || bname === 'cave_air') return;
-    if (block.diggable === false) return;
-
-    const toolCat = inferToolCategory(block);
-    const hasRequirement = block.harvestTools && Object.keys(block.harvestTools).length > 0;
-
-    // Check for a suitable tool (or a speed-improving tool for axe/shovel/pickaxe categories)
-    const items = bot.inventory.items();
-    const toolSuffix = `_${toolCat}`;
-    const hasGoodTool = items.some(i =>
-        (hasRequirement && block.harvestTools[i.type]) ||
-        (!hasRequirement && i.name.endsWith(toolSuffix))
-    );
-    if (hasGoodTool) { await equipBestTool(block); return; }
-
-    const chestId = bot.registry.blocksByName.chest?.id;
-    if (chestId !== undefined) {
-        const chests = bot.findBlocks({ matching: chestId, maxDistance: 16, count: 5 });
-        for (const cpos of chests) {
-            if (currentCancelToken.cancelled) return;
-            try {
-                const chestBlock = bot.blockAt(cpos);
-                if (chestBlock) {
-                    await withTimeout(bot.pathfinder.goto(new goals.GoalNear(cpos.x, cpos.y, cpos.z, 2)), 10000, 'goto chest', () => bot.pathfinder.setGoal(null));
-                    const chestWindow = await bot.openContainer(chestBlock);
-                    const neededItems = [`iron_${toolCat}`, `stone_${toolCat}`, `wooden_${toolCat}`, 'iron_ingot', 'cobblestone'];
-                    for (const item of chestWindow.containerItems()) {
-                        if (neededItems.includes(item.name)) {
-                            await chestWindow.withdraw(item.type, null, item.name.endsWith(toolCat) ? 1 : Math.min(item.count, 64));
-                        }
-                    }
-                    bot.closeWindow(chestWindow);
-                }
-            } catch(e) {
-                console.log(`[Actuator] ensureToolFor chest scan: ${e.message}`);
-            }
-            // Re-check if we now have a tool after looting
-            const itemsPostChest = bot.inventory.items();
-            if (itemsPostChest.some(i => (hasRequirement && block.harvestTools[i.type]) || (!hasRequirement && i.name.endsWith(toolSuffix)))) {
-                await equipBestTool(block); return;
-            }
-        }
-    }
-
-    if (!hasRequirement) {
-        console.log(`[Actuator] No ${toolCat} found for ${block.name}. Continuing without optional tool.`);
-        return;
-    }
-
-    console.log(`[Actuator] No ${toolCat} found for ${block.name}. Auto-crafting tool...`);
-    bot.chat(`[System] Need a ${toolCat}. Crafting one...`);
-
-    const countBy = (set) => bot.inventory.items().filter(i => set.has(i.name)).reduce((s, i) => s + i.count, 0);
-
-    // ── Step 1: Gather logs if short on planks ──────────────────────────────
-    if (currentCancelToken.cancelled) return;
-    const sticksHave = bot.inventory.items().filter(i => i.name === 'stick').reduce((s, i) => s + i.count, 0);
-    const planksNeeded = 3 + (sticksHave >= 2 ? 0 : 2);
-
-    if (countBy(PLANK_NAMES) < planksNeeded) {
-        const logsNeeded = Math.ceil((planksNeeded - countBy(PLANK_NAMES)) / 4);
-        const logsHave = countBy(LOG_NAMES);
-        console.log(`[auto-tool] planksNeeded=${planksNeeded} planksHave=${countBy(PLANK_NAMES)} logsNeeded=${logsNeeded} logsHave=${logsHave} inv=[${bot.inventory.items().map(i=>`${i.name}x${i.count}`).join(',')}]`);
-        if (logsHave < logsNeeded) {
-            for (const logName of LOG_NAMES) {
-                if (currentCancelToken.cancelled) return;
-                const logBlockId = bot.registry.blocksByName[logName]?.id;
-                if (!logBlockId) continue;
-                // Use function matcher (not numeric ID) to force full block-by-block scan.
-                // Forge servers have palette state IDs that differ from prismarine-block's
-                // vanilla expectations — numeric matching triggers a palette pre-check that
-                // skips sections containing the block, returning 0 results even when blocks
-                // are present. Function matcher bypasses palette pre-check entirely.
-                // 32b: full function matcher scan (handles Forge block registry remapping).
-                // 64b fallback: numeric palette matcher — safe radius (no EPIPE risk), works for
-                // natural world logs which use standard vanilla palette IDs.
-                // IMPORTANT: Never use function matcher + useExtraInfo beyond 32b — at 64b it
-                // scans ~1.1M blocks, blocking the event loop long enough for server keepalive
-                // to fire (EPIPE disconnection).
-                const matchFn = b => b && b.type === logBlockId;
-                let logBlocks = bot.findBlocks({ matching: matchFn, maxDistance: 32, count: logsNeeded * 4, useExtraInfo: true });
-                if (logBlocks.length === 0) {
-                    // Fallback: 64b numeric scan for natural world trees
-                    logBlocks = bot.findBlocks({ matching: logBlockId, maxDistance: 64, count: logsNeeded * 4 });
-                }
-                if (logBlocks.length === 0) continue;
-                // Prefer trunk-level logs (close to bot's y) over high canopy logs.
-                // collectBlock can't easily navigate to logs 6+ blocks above ground.
-                const botFloorY = Math.floor(bot.entity.position.y);
-                const lowLogs = logBlocks.filter(p => Math.abs(p.y - botFloorY) <= 5);
-                const sortedLogs = lowLogs.length > 0 ? lowLogs : logBlocks;
-                // Limit to 2 candidates — spending too many timeouts here burns the
-                // 120-s collect budget before the main collect loop even starts.
-                for (const logPos of sortedLogs.slice(0, 2)) {
-                    if (currentCancelToken.cancelled) return;
-                    if (countBy(LOG_NAMES) >= logsNeeded) break;
-                    // Use GoalNear(4)+dig instead of collectBlock.collect().
-                    // collectBlock requires strict adjacency and its pathfinder hits thinkTimeout
-                    // on hilly/canopy terrain. GoalNear(4) only needs to be within 4 blocks
-                    // which is achievable from the base of the tree.
-                    try {
-                        await withTimeout(
-                            bot.pathfinder.goto(new goals.GoalNear(logPos.x, logPos.y, logPos.z, 4)),
-                            8000, `auto-goto ${logName}`, () => bot.pathfinder.setGoal(null)
-                        );
-                        const b = bot.blockAt(logPos);
-                        if (b && b.type === logBlockId) {
-                            await bot.dig(b, true);
-                            // Wait briefly for the dropped item to auto-collect
-                            await new Promise(r => setTimeout(r, 800));
-                        }
-                    } catch (e) { console.log(`[Actuator] auto-tool: ${e.message}`); }
-                    if (movements) bot.pathfinder.setMovements(movements);
-                }
-                if (countBy(LOG_NAMES) >= logsNeeded) break;
-            }
-        }
-
-        // ── Step 2: Craft planks ──────────────────────────────────────────────
-        if (currentCancelToken.cancelled) return;
-        for (const log of bot.inventory.items().filter(i => LOG_NAMES.has(i.name))) {
-            const plankName = log.name.replace(/_log$/, '_planks').replace(/_wood$/, '_planks');
-            const plankId = bot.registry.itemsByName[plankName]?.id;
-            if (plankId === undefined) continue;
-            const recipe = bot.recipesFor(plankId, null, 1, false)[0];
-            if (!recipe) continue;
-            try { await bot.craft(recipe, Math.min(log.count, 2), null); break; }
-            catch (e) { console.log(`[Actuator] auto-tool craft planks: ${e.message}`); }
-        }
-    }
-
-    // ── Step 3: Craft sticks ─────────────────────────────────────────────────
-    if (currentCancelToken.cancelled) return;
-    if (bot.inventory.items().filter(i => i.name === 'stick').reduce((s, i) => s + i.count, 0) < 2) {
-        const anyPlank = bot.inventory.items().find(i => PLANK_NAMES.has(i.name));
-        if (anyPlank) {
-            const stickId = bot.registry.itemsByName['stick']?.id;
-            const r = stickId !== undefined ? bot.recipesFor(stickId, null, 1, false)[0] : null;
-            if (r) try { await bot.craft(r, 1, null); } catch (e) { console.log(`[Actuator] auto-tool craft sticks: ${e.message}`); }
-        }
-    }
-
-    // ── Step 4: Find or create crafting table, craft tool ───────────────────
-    if (currentCancelToken.cancelled) return;
-    const ctBlockId = bot.registry.blocksByName['crafting_table']?.id;
-    let craftingTable = ctBlockId !== undefined ? bot.findBlock({ matching: ctBlockId, maxDistance: 32 }) : null;
-
-    if (!craftingTable) {
-        const ctItemId = bot.registry.itemsByName['crafting_table']?.id ?? ctBlockId;
-        if (ctItemId !== undefined && !bot.inventory.items().find(i => i.name === 'crafting_table')) {
-            const ctR = bot.recipesFor(ctItemId, null, 1, false)[0];
-            if (ctR) try { await bot.craft(ctR, 1, null); } catch (e) { console.log(`[Actuator] auto-tool craft table: ${e.message}`); }
-        }
-        if (currentCancelToken.cancelled) return;
-        const ctItem = bot.inventory.items().find(i => i.name === 'crafting_table');
-        if (ctItem) {
-            try {
-                await placeItemIntelligently(bot, ctItem, null);
-                craftingTable = ctBlockId !== undefined ? bot.findBlock({ matching: ctBlockId, maxDistance: 8 }) : null;
-            } catch (e) { console.log(`[Actuator] auto-tool place table: ${e.message}`); }
-        }
-    }
-
-    if (currentCancelToken.cancelled) return;
-    if (craftingTable) {
-        let toolName = `wooden_${toolCat}`;
-        const invNames = new Set(bot.inventory.items().map(i => i.name));
-        if (invNames.has('iron_ingot')) { toolName = `iron_${toolCat}`; }
-        else if (invNames.has('cobblestone')) { toolName = `stone_${toolCat}`; }
-
-        const toolId = bot.registry.itemsByName[toolName]?.id;
-        if (toolId !== undefined) {
-            const toolR = bot.recipesFor(toolId, null, 1, true)[0];
-            if (toolR) {
-                try {
-                    await withTimeout(bot.pathfinder.goto(new goals.GoalNear(craftingTable.position.x, craftingTable.position.y, craftingTable.position.z, 1)), 15000, 'goto table (auto-tool)', () => bot.pathfinder.setGoal(null));
-                    if (currentCancelToken.cancelled) return;
-                    await bot.craft(toolR, 1, craftingTable);
-                    bot.chat(`[System] Crafted a ${toolName}!`);
-                } catch (e) { console.log(`[Actuator] auto-tool craft ${toolName}: ${e.message}`); }
-            }
-        }
-    } else {
-        console.log('[Actuator] auto-tool: could not obtain a crafting table.');
-    }
-    await equipBestTool(block);
-}
 
 // Wither summon pattern. Skulls must be placed LAST to trigger the spawn.
 // Layout (relative offsets from baseX/baseY/baseZ):
@@ -6002,15 +4363,15 @@ async function processActionQueue() {
             } else if (action.action === 'shredder_add') {
                 const junkName = (action.target || '').replace(/^[a-z_]+:/, '').trim();
                 if (junkName) {
-                    _junkList.add(junkName);
+                    _actCtx.junkList.add(junkName);
                     _saveJunkList();
                     bot.chat(`[System] Added ${junkName} to auto-shredder list.`);
-                    process.send({ type: 'USER_CHAT', data: { username: "System", message: `${junkName} added to junk list (${_junkList.size} total).`, environment: getEnvironmentContext() } });
+                    process.send({ type: 'USER_CHAT', data: { username: "System", message: `${junkName} added to junk list (${_actCtx.junkList.size} total).`, environment: getEnvironmentContext() } });
                 }
             } else if (action.action === 'shredder_remove') {
                 const junkName = (action.target || '').replace(/^[a-z_]+:/, '').trim();
                 if (junkName) {
-                    _junkList.delete(junkName);
+                    _actCtx.junkList.delete(junkName);
                     _saveJunkList();
                     bot.chat(`[System] Removed ${junkName} from auto-shredder list.`);
                     process.send({ type: 'USER_CHAT', data: { username: "System", message: `${junkName} removed from junk list.`, environment: getEnvironmentContext() } });

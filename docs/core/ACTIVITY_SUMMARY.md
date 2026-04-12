@@ -135,3 +135,18 @@ Entries:
   4. **Structure /locate integration**: `goto {target: "fortress"}` etc. issues `/locate structure minecraft:<id>`, parses `[X:N, ~, Z:N]` from chat, navigates to result.
   5. **Internal waypoint system**: `data/waypoints.json` stores `{name, x, y, z, dimension}`. New `add_waypoint` action saves current position. `goto` resolves internal waypoints first, then JourneyMap, then /locate. Cross-dimension waypoints auto-prepend `navigate_portal` action.
   6. **README**: Added full action reference table, waypoint system docs, and screen recording guidance (OBS / ReplayMod).
+
+## 2026-04-12 — TASK-20260412-001: bot_actuator.js Split & Quality Improvements
+
+### Changes
+- **src/actuator/ctx.js** (new): Singleton context module holding all shared mutable state (bot, mcData, movements, actionQueue, cancelToken, file paths, etc.). Enables extracted modules to share state without circular deps.
+- **src/actuator/utils.js** (new): Pure spatial/utility helpers extracted from bot_actuator.js — `withTimeout`, `isAirLikeBlock`, `isSolidBridgeSupport`, `isSafeForward`, `hasForwardGap`, `hasLikelyBridgeNeed`, `chooseBridgeBlock`.
+- **src/actuator/environment.js** (new): Data access & persistence layer — `loadWaypoints`/`saveWaypoints` (now atomic via `.tmp`+`renameSync`), path cache, blackboard, safe zones, queue checkpoints, junk list, auto-shredder, `getEnvironmentContext`.
+- **src/actuator/flight.js** (new): All aviation logic — `JETPACK_MOD_REGISTRY` (14+ mods), `detectAviationMethod`, `flyWithJetpack`, `flyWithElytra`, `tryElytraGapCross`, `tryBridgeForward`, `_setServerFlyingFlag`, `getJetpackFuelRatio`.
+- **src/actuator/tools.js** (new): Equipment & container logic — `ensureToolFor`, `placeItemIntelligently`, `equipBestTool/Weapon/Armor`, container withdraw/deposit, `getBestFoodItem`, `inferToolCategory`, material tag groups.
+- **src/bot_actuator.js**: Reduced by 1678 lines. Module requires added after `createBot`; `_actCtx.bot`, `_actCtx.mcData`, `_actCtx.movements` initialized; `_junkList` references replaced with `_actCtx.junkList`.
+- **src/agent_manager.js**: RAG query improved — strips command words from user message, appends dimension/entity/block keywords from environment context; result count increased from 3 to 5.
+- **public/app.js**: Macro UI rewritten with `ACTION_FIELDS` config — each action shows only relevant input fields; fields rebuild on action-select change; 📍 button fills x/y/z from current bot position.
+- **public/style.css**: Macro rows switched from CSS grid to flexbox; per-field flex sizing (`macro-text`, `macro-num`, `macro-usepos`); responsive wrap at 1100px.
+- **docs/core/STATE.yaml**: Updated smoke_status and recent_changes.
+- All 6 tests passing.

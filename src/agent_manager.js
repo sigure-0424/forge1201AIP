@@ -747,7 +747,21 @@ Do NOT return any action other than chat.`;
         const inTheEnd = data.environment?.dimension === 'the_end' || data.environment?.dimension === 'minecraft:the_end';
         const endDimNote = inTheEnd ? `\n*CRITICAL*: You are in THE END dimension. Do NOT start dragon combat unless the player explicitly says to fight or kill the dragon. Respond to the player's actual instruction (goto, come, eat, equip, status, etc.). Do NOT collect, craft, smelt, brew, or gather resources — there are no useful resources in the End. Use kill(ender_dragon) ONLY when explicitly instructed.` : '';
 
-        let prompt = `You are a Minecraft AI bot named ${botId}.
+        let prompt = `You are a Minecraft AI bot named ${botId}. Your response MUST be a JSON array — never plain text.
+
+━━━ RESPONSE FORMAT (ABSOLUTE) ━━━
+Output ONLY a JSON array like: [{"action":"come","target":"PlayerName"}]
+NO greetings. NO explanations. NO prose. A JSON array is the only valid output.
+
+━━━ ACTION-FIRST RULE ━━━
+Any command word → output the action. NEVER output a chat response to a command.
+English: "come", "follow", "go to", "collect", "kill", "build", "craft", "give", "stop"
+Japanese: 来い/来て/ついてきて → come  |  行って/行け/移動して → goto  |  集めて/取ってきて → collect
+          倒して/殺して/戦って → kill  |  止まれ/止まって/停止 → stop  |  クラフト/作って → craft
+WRONG:  User says "来い" → [{"action":"chat","message":"はい！向かいます"}]
+CORRECT: User says "来い" → [{"action":"come","target":"${data.username === 'TaskSystem' ? 'Player' : (data.username || 'Player')}"}]
+
+━━━ INSTRUCTION ━━━
 ${isSystemFailure ? `SYSTEM FEEDBACK (previous action result): "${data.message}"` : `${data.username === 'TaskSystem' ? `TASK INSTRUCTION` : `User '${data.username}' said`}: "${data.message}"`}
 Current Environment: ${JSON.stringify(data.environment)}${targetedBlockContext}${taskContext}${currentQueueContext}${otherBotsContext}${blackboardContext}${coordinatorNote}${endDimNote}
 
@@ -905,10 +919,25 @@ Storage MOD remote access:     send_custom_payload (channel from wiki)
 `;
 
 
-        // Issue 10: Inject relevant wiki knowledge (RAG) if available
+        // Issue 10: Inject relevant wiki knowledge (RAG) if available.
+        // Build a richer query by combining message keywords + environment context
+        // so that dimension-specific and mob-specific wiki pages surface naturally.
         try {
-            const ragQuery = data.message || '';
-            const wikiContext = wikiRag.searchForPrompt(ragQuery, 3);
+            const rawMsg = data.message || '';
+            // Strip common Japanese/English command words that add noise to index lookups
+            const msgKeywords = rawMsg
+                .replace(/[-！!]\s*/, '')
+                .replace(/^(来い|来て|行け|行って|止まれ|止まって|集めて|倒して|作って|教えて|どこ|何|how|what|where|go|come|stop|give|craft|kill|collect|tell me|explain)\s*/i, '')
+                .trim();
+            // Add environment context: dimension, nearby mod entities/blocks
+            const env = data.environment || {};
+            const envKeywords = [
+                env.dimension ? env.dimension.replace(/^minecraft:/, '') : '',
+                ...(env.nearby_entities || []).slice(0, 3).map(s => s.replace(/^\d+x\s*/, '')),
+                ...(env.nearby_blocks  || []).slice(0, 3).map(s => s.replace(/^\d+x\s*/, '')),
+            ].filter(Boolean).join(' ');
+            const ragQuery = [msgKeywords, envKeywords].filter(Boolean).join(' ').trim() || rawMsg;
+            const wikiContext = wikiRag.searchForPrompt(ragQuery, 5);
             if (wikiContext) prompt += wikiContext;
         } catch(e) {}
 
