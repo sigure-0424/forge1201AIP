@@ -80,10 +80,15 @@ function summariseNbt(nbtValue) {
         try {
             const raw = nbtValue.display.value.Name.value;
             const parsed = JSON.parse(raw);
-            const name = parsed.text || parsed.translate || raw;
+            const name = String(parsed.text || parsed.translate || raw)
+                .replace(/\\/g, '\\\\')
+                .replace(/"/g, '\\"');
             parts.push(`name:"${name}"`);
         } catch (_) {
-            parts.push(`name:"${nbtValue.display.value.Name.value}"`);
+            const safe = String(nbtValue.display.value.Name.value)
+                .replace(/\\/g, '\\\\')
+                .replace(/"/g, '\\"');
+            parts.push(`name:"${safe}"`);
         }
     }
 
