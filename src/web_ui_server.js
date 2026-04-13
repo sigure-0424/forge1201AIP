@@ -560,13 +560,20 @@ class WebUIServer {
     start(port = 3000) {
         let currentPort = port;
 
+        const logListening = () => {
+            const addr = this.server.address();
+            const p = (addr && typeof addr === 'object') ? addr.port : currentPort;
+            console.log(`[WebUI] Dashboard available at http://localhost:${p}`);
+        };
+
         const handleListenError = (err) => {
             if (err && err.code === 'EADDRINUSE') {
                 const nextPort = currentPort + 1;
                 console.warn(`[WebUI] Port ${currentPort} is in use. Retrying on ${nextPort}...`);
                 currentPort = nextPort;
                 try {
-                    this.server.listen(currentPort);
+                    // Bind to 0.0.0.0 so the dashboard is reachable in Docker and WSL2.
+                    this.server.listen(currentPort, '0.0.0.0', logListening);
                 } catch (e) {
                     handleListenError(e);
                 }
@@ -579,9 +586,11 @@ class WebUIServer {
         this.server.on('error', handleListenError);
 
         try {
-            this.server.listen(currentPort, () => {
-                console.log(`[WebUI] Dashboard available at http://localhost:${currentPort}`);
-            });
+            // Explicitly bind to 0.0.0.0 (all IPv4 interfaces) to ensure the dashboard
+            // is reachable from the host in Docker / WSL2 environments.  Without a host
+            // argument Node.js may bind to :: (IPv6-only) on some Linux configurations,
+            // which would make the WebUI unreachable via IPv4 (e.g. http://localhost:3000).
+            this.server.listen(currentPort, '0.0.0.0', logListening);
         } catch (e) {
             handleListenError(e);
         }

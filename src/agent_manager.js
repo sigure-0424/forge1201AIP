@@ -309,6 +309,18 @@ class AgentManager {
                     return;
                 }
 
+                // GUI snapshot from interact_gui — route directly to LLM with a
+                // GUI-specific prompt so it generates the correct click_slot /
+                // transfer_slot steps for the open window.
+                if (message.gui_context === true) {
+                    console.log(`[AgentManager] GUI snapshot received for ${botId} — routing to LLM for window interaction.`);
+                    const queue = this.chatQueue.get(botId) || [];
+                    queue.unshift(data);
+                    this.chatQueue.set(botId, queue);
+                    this.processNextQueueItem(botId);
+                    return;
+                }
+
                 // Issue 8: Expanded success/failure pattern detection
                 const SUCCESS_PATTERNS = [
                     'Successfully', 'Explored', 'Entered portal', 'Reached destination',
@@ -900,8 +912,24 @@ BLAZE (fire resistance): brew(fire_resistance) → navigate_portal(nether) → g
 }]
   -- Execute a sequence of primitive operations. Use when activate_block alone is insufficient.
   -- Primitives: equip, goto, look_at, sneak, sprint, activate_block, activate_item,
-  --             swing_arm, attack_block, wait, send_packet, chat
+  --             swing_arm, attack_block, wait, send_packet, chat,
+  --             click_slot, transfer_slot, drop_slot, close_window, read_window
   -- continue_on_error: optional boolean — keep going even if a step fails
+
+[{"action": "interact_gui", "x": 10, "y": 64, "z": 20, "instruction": "put coal into the fuel slot"}]
+  -- Universal MOD GUI interaction: navigate to block, open its GUI, read slot contents,
+  -- then generate follow-up macro steps to operate the window.
+  -- Works with ANY mod GUI that uses Minecraft's container/window protocol.
+  -- x, y, z: coordinates of the block whose GUI you want to open
+  -- instruction: natural-language description of what to do in the GUI
+  -- The system will read the open window and return its slot contents as a snapshot.
+  -- After receiving the snapshot, output a macro with GUI primitives:
+  --   click_slot    { slot:<n>, button:0 }   left-click a slot
+  --   click_slot    { slot:<n>, button:1 }   right-click a slot
+  --   transfer_slot { slot:<n> }              shift+click to quick-move item
+  --   drop_slot     { slot:<n> }              drop item from slot
+  --   close_window  {}                        close the GUI when done
+  --   read_window   {}                        re-read slots after changes
 
 [{"action": "send_custom_payload", "channel": "modname:channel", "data": "0100"}]
   -- Send a MOD keybinding packet (for mods that use server-side key events).
@@ -913,6 +941,7 @@ BLAZE (fire resistance): brew(fire_resistance) → navigate_portal(nether) → g
 Create MOD — wrench pickup:    activate_block + item:"create:wrench" + sneak:true
 Create MOD — wrench rotate:    activate_block + item:"create:wrench" + sneak:false
 Create MOD — configure block:  activate_block (no item needed, block opens GUI)
+Any MOD with a GUI container:  interact_gui (works for ALL mods, no wiki needed)
 Industrial MODs — wrench use:  wiki_search first to confirm the exact behavior
 Combat MOD combos:             macro with sneak/sprint/swing_arm/wait sequence
 Storage MOD remote access:     send_custom_payload (channel from wiki)

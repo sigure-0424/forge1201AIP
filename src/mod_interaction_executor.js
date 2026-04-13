@@ -20,12 +20,24 @@
 //   send_packet    { channel: "modname:channel", data: "hex_string" }
 //   chat           { message: "text" }
 //
+// ── GUI interaction primitives (work with ANY open window) ───────────────────
+//   click_slot     { slot, button?: 0|1|2, mode?: 0-6 }
+//                  Click a slot in the current window.
+//                  button 0 = left, 1 = right, 2 = middle.
+//                  mode follows Minecraft's window action modes (0 = normal click).
+//   transfer_slot  { slot }  Shift+click to quick-transfer an item.
+//   drop_slot      { slot }  Drop an item from a slot (Q key equivalent).
+//   close_window   {}        Close the currently open window.
+//   read_window    {}        Emit a GUI_SNAPSHOT IPC message with the current
+//                            window state (used by AgentManager for re-reading).
+//
 // send_packet sends a ServerboundCustomPayloadPacket, which is how most mods
 // receive key-press events from the client (e.g. remote inventory access).
 // The `data` field is an optional hex string of the packet body.
 
 const Vec3 = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
+const { buildSnapshot } = require('./gui_snapshot');
 
 const FACE_VECTORS = {
     top:    new Vec3(0,  1, 0),
@@ -239,6 +251,96 @@ async function executeStep(bot, step, cancelToken) {
         const msg = String(step.message || '');
         if (msg) bot.chat(msg);
         return { ok: true };
+    }
+
+    // ── click_slot ───────────────────────────────────────────────────────────
+    // Click a slot in the currently open window.
+    //   slot:   required — zero-based slot index from the GUI snapshot
+    //   button: 0 (left, default) | 1 (right) | 2 (middle)
+    //   mode:   Minecraft window click mode 0-6 (default 0 = normal click)
+    if (p === 'click_slot') {
+        const slot = Number(step.slot);
+        if (!Number.isFinite(slot) || slot < 0) {
+            return { ok: false, message: 'click_slot: requires a non-negative slot number' };
+        }
+        if (!bot.currentWindow) {
+            return { ok: false, message: 'click_slot: no window is currently open' };
+        }
+        const button = Number.isFinite(Number(step.button)) ? Number(step.button) : 0;
+        const mode   = Number.isFinite(Number(step.mode))   ? Number(step.mode)   : 0;
+        try {
+            await bot.clickWindow(slot, button, mode);
+            return { ok: true };
+        } catch (e) {
+            return { ok: false, message: `click_slot: ${e.message}` };
+        }
+    }
+
+    // ── transfer_slot ────────────────────────────────────────────────────────
+    // Shift+click a slot to quick-transfer the item to the other inventory region.
+    //   slot: required — zero-based slot index
+    if (p === 'transfer_slot') {
+        const slot = Number(step.slot);
+        if (!Number.isFinite(slot) || slot < 0) {
+            return { ok: false, message: 'transfer_slot: requires a non-negative slot number' };
+        }
+        if (!bot.currentWindow) {
+            return { ok: false, message: 'transfer_slot: no window is currently open' };
+        }
+        try {
+            // mode 1 = shift+click
+            await bot.clickWindow(slot, 0, 1);
+            return { ok: true };
+        } catch (e) {
+            return { ok: false, message: `transfer_slot: ${e.message}` };
+        }
+    }
+
+    // ── drop_slot ────────────────────────────────────────────────────────────
+    // Drop the item stack in the specified slot (Q-key equivalent).
+    //   slot: required — zero-based slot index
+    if (p === 'drop_slot') {
+        const slot = Number(step.slot);
+        if (!Number.isFinite(slot) || slot < 0) {
+            return { ok: false, message: 'drop_slot: requires a non-negative slot number' };
+        }
+        if (!bot.currentWindow) {
+            return { ok: false, message: 'drop_slot: no window is currently open' };
+        }
+        try {
+            // mode 4 with button 1 = drop whole stack from slot
+            await bot.clickWindow(slot, 1, 4);
+            return { ok: true };
+        } catch (e) {
+            return { ok: false, message: `drop_slot: ${e.message}` };
+        }
+    }
+
+    // ── close_window ─────────────────────────────────────────────────────────
+    // Close the currently open window.
+    if (p === 'close_window') {
+        try {
+            if (bot.currentWindow) {
+                bot.closeWindow(bot.currentWindow);
+            }
+            return { ok: true };
+        } catch (e) {
+            return { ok: false, message: `close_window: ${e.message}` };
+        }
+    }
+
+    // ── read_window ──────────────────────────────────────────────────────────
+    // Emit a GUI_SNAPSHOT IPC message with the current window state.
+    // The AgentManager reads this to re-query the LLM with updated slot data.
+    if (p === 'read_window') {
+        const snapshot = buildSnapshot(bot);
+        if (!snapshot) {
+            return { ok: false, message: 'read_window: no window is currently open' };
+        }
+        if (process.send) {
+            process.send({ type: 'GUI_SNAPSHOT', data: snapshot });
+        }
+        return { ok: true, snapshot };
     }
 
     return { ok: false, message: `Unknown primitive: "${p}"` };
