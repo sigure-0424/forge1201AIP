@@ -321,22 +321,45 @@ class AgentManager {
                     return;
                 }
 
-                // Issue 8: Expanded success/failure pattern detection
+                // Issue 8: Expanded success/failure pattern detection (case-insensitive matching)
+                const msgLower = data.message.toLowerCase();
                 const SUCCESS_PATTERNS = [
-                    'Successfully', 'Explored', 'Entered portal', 'Reached destination',
-                    'Eliminated', 'Crafted', 'Smelted', 'Brewed', 'Enchanted', 'Placed',
-                    'Collected', 'Now following', 'Geared up', 'Recovered', 'Done'
+                    'successfully', 'explored', 'entered portal', 'reached destination',
+                    'eliminated', 'crafted', 'smelted', 'brewed', 'enchanted', 'placed',
+                    'collected', 'now following', 'geared up', 'recovered', 'done',
+                    'arrived at destination', 'ate ', 'equipped', 'deposited', 'transferred',
+                    'withdrew'
                 ];
                 const FAILURE_PATTERNS = [
-                    'Failed', 'Cannot', 'Error', 'failed', 'not found',
-                    'cycle', 'timed out', 'unreachable', 'stuck', 'Task Remaining',
-                    'No furnace', 'No brewing stand', 'No enchanting table',
-                    'not in inventory', 'not available', 'No valid'
+                    'failed', 'cannot', 'error',
+                    'not found', 'cycle', 'timed out', 'unreachable', 'stuck', 'task remaining',
+                    'no furnace', 'no brewing stand', 'no enchanting table',
+                    'not in inventory', 'not available', 'no valid',
+                    'could not find',
+                    'no food available', 'no water found',
+                    'lost sight', 'did not contain',
+                    'could not deposit', 'could not reach container',
+                    'boat placed but could not'
                 ];
-                const isSuccess = SUCCESS_PATTERNS.some(p => data.message.includes(p));
-                const isFailure = !isSuccess && FAILURE_PATTERNS.some(p => data.message.includes(p));
+                // Progress patterns: partial completion — reset failure counter but feed back
+                // to LLM so it can issue a follow-up action for the remaining quantity.
+                // These must NOT increment the failure counter because real progress was made.
+                const PROGRESS_PATTERNS = ['partially collected', 'partially killed'];
+                const isProgress = PROGRESS_PATTERNS.some(p => msgLower.includes(p));
+                const isSuccess = !isProgress && SUCCESS_PATTERNS.some(p => msgLower.includes(p));
+                const isFailure = !isProgress && !isSuccess && FAILURE_PATTERNS.some(p => msgLower.includes(p));
 
-                if (isSuccess) {
+                if (isProgress) {
+                    // Partial completion: progress was made, so don't penalise the failure counter.
+                    // Route the partial result back to the LLM so it can re-plan for the remainder.
+                    console.log(`[AgentManager] Partial progress for ${botId}: ${data.message}. Re-routing to LLM.`);
+                    this.consecutiveFailures.set(botId, 0);
+                    const queue = this.chatQueue.get(botId) || [];
+                    queue.unshift(data);
+                    this.chatQueue.set(botId, queue);
+                    this.processNextQueueItem(botId);
+                    return;
+                } else if (isSuccess) {
                     console.log(`[AgentManager] Task completed for ${botId}: ${data.message}.`);
                     this.consecutiveFailures.set(botId, 0); // reset on success
                     // Issue 1: in task_mode, mark current task done and start the next
@@ -788,6 +811,8 @@ Current Environment: ${JSON.stringify(data.environment)}${targetedBlockContext}$
 *CRITICAL*: To collect any stone-type block or ore you NEED a pickaxe first. ALWAYS check "has_pickaxe" in Current Environment. If "has_pickaxe" is false, craft one first.
 *CRITICAL*: Stone-type blocks (stone, andesite, granite, diorite) and ores are UNDERGROUND. If the system reports "not found within 128 blocks", you must dig down first: [{"action":"collect","target":"stone","quantity":16,"timeout":60}] will open a shaft. Then retry the original target.
 *CRITICAL*: If a SYSTEM FEEDBACK message describes a failure, respond with the corrective action chain — do NOT just repeat the failed action.
+*CRITICAL*: If a SYSTEM FEEDBACK says "Partially collected X/Y <item>", compute the remaining quantity (Y - X) and issue [{"action":"collect","target":"<item>","quantity":<remaining>,"timeout":120}] to finish the job. Do NOT issue a chat message — issue the collect action.
+*CRITICAL*: If a SYSTEM FEEDBACK says "Partially killed X/Y <mob>", compute the remaining quantity (Y - X) and issue [{"action":"kill","target":"<mob>","quantity":<remaining>,"timeout":120}] to finish the job. Do NOT issue a chat message — issue the kill action.
 *CRITICAL*: If a SYSTEM FEEDBACK message lists missing raw materials for a craft, you must generate actions to ONLY collect those specific raw materials.
 *CRITICAL*: Always use the longest timeout that makes sense. Collection of many blocks needs timeout:120 or more.
 *CRITICAL*: If the user provides only two numbers for coordinates, assign them to X and Z, omit Y.
