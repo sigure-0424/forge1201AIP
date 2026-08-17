@@ -32,6 +32,12 @@ The system achieves stability in modded environments through a **Vanilla-Mapping
 ## WebUI Dashboard
 
 A local WebUI is available at `http://localhost:3000` after starting the bot. You can use this dashboard to view bot health, inventory, active tasks, and send chat commands directly without in-game access.
+If port `3000` is already in use, the server automatically retries on the next port (`3001`, `3002`, ...). Check `bot_system.log` for the actual line: `[WebUI] Dashboard available at http://localhost:<port>`.
+
+## Docker Usage
+
+Docker is optional for normal bot usage. You can run the system directly with `node index.js`.
+Use Docker when you want a reproducible full stack (Forge server + bot + WebUI) or when validating environment-dependent issues.
 
 ## Configuration & Requirements
 

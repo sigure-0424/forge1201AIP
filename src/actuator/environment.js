@@ -420,6 +420,13 @@ function getEnvironmentContext() {
         has_pickaxe:    inventoryItems.some(i => i.name.endsWith('_pickaxe')),
         has_axe:        inventoryItems.some(i => i.name.endsWith('_axe')),
         has_sword:      inventoryItems.some(i => i.name.endsWith('_sword')),
+        pickaxe_tier: (() => {
+            const tiers = ['netherite', 'diamond', 'iron', 'stone', 'golden', 'wooden'];
+            for (const tier of tiers) {
+                if (inventoryItems.some(i => i.name === `${tier}_pickaxe`)) return tier;
+            }
+            return 'none';
+        })(),
         nearby_blocks:     nearbyBlocks,
         nearby_structures: nearbyStructures,
         nearby_entities:   entitySummary,

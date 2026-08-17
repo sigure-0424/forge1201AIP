@@ -1,4 +1,6 @@
 function resolveRequiredMaterials(registry, targetItemName, initialQuantity, inventoryMap = {}) {
+    // Normalize: strip namespace prefix, lowercase
+    targetItemName = String(targetItemName || '').toLowerCase().replace(/^[a-z_0-9]+:/, '').trim();
     const required = {};
     const available = { ...inventoryMap };
 
@@ -34,6 +36,8 @@ function resolveRequiredMaterials(registry, targetItemName, initialQuantity, inv
 
     function recurse(itemName, qty, path = []) {
         if (qty <= 0) return;
+        // Normalize ingredient name (handles IDs from registry ingredients resolved to names elsewhere)
+        itemName = String(itemName || '').toLowerCase().replace(/^[a-z_0-9]+:/, '').trim();
 
         if (path.includes(itemName)) {
             required[itemName] = (required[itemName] || 0) + qty;

@@ -405,13 +405,31 @@ async function removeBot(id) {
 async function addBot() {
     const name = els.newBotName.value.trim();
     if (!name) return;
-    await fetch('/api/bots', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, host: els.newBotHost.value.trim(), port: els.newBotPort.value.trim() })
-    });
-    els.newBotName.value = '';
-    els.manageModal.classList.add('hidden');
+    const btn = els.manageAdd;
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Adding...';
+    try {
+        const res = await fetch('/api/bots', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, host: els.newBotHost.value.trim(), port: els.newBotPort.value.trim() })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+            throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        btn.textContent = data.recovered ? `Recovered ${name}` : `Added ${name}`;
+        els.newBotName.value = '';
+        setTimeout(() => {
+            els.manageModal.classList.add('hidden');
+            btn.textContent = original;
+            btn.disabled = false;
+        }, 900);
+    } catch (e) {
+        btn.textContent = `Error: ${e.message}`;
+        btn.disabled = false;
+    }
 }
 
 async function spawnBulkBots() {

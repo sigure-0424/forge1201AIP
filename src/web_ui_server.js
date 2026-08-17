@@ -17,6 +17,7 @@ class WebUIServer {
         this.server = http.createServer(this.app);
         this.wss    = new WebSocket.Server({ server: this.server });
         this.clients = new Set();
+        this._listeningPort = null;
 
         this._setupMiddleware();
         this._setupRoutes();
@@ -58,13 +59,37 @@ class WebUIServer {
         this.app.post('/api/bots', (req, res) => {
             const { name, host, port } = req.body || {};
             if (!name) return res.status(400).json({ error: 'name required' });
-            if (!/^[a-zA-Z0-9_]{1,32}$/.test(name)) return res.status(400).json({ error: 'Invalid bot name. Must be 1-32 alphanumeric characters or underscores.' });
-            if (m.bots.has(name)) return res.status(409).json({ error: 'Bot already running' });
-            const h = host || this.defaults.host || 'localhost';
-            const p = parseInt(port || this.defaults.port || 25565);
-            const mode = this.defaults.mode || 'full_auto';
-            m.startBot(name, { host: h, port: p, mode });
-            res.json({ ok: true, botId: name });
+            if (!/^[a-zA-Z0-9_]{1,32}$/.test(name)) {
+                return res.status(400).json({ error: 'Invalid bot name. Must be 1-32 alphanumeric characters or underscores.' });
+            }
+
+            try {
+                if (m.bots.has(name)) {
+                    return res.status(409).json({ error: 'Bot already running' });
+                }
+
+                const h = host || this.defaults.host || 'localhost';
+                const p = parseInt(port || this.defaults.port || 25565);
+                const mode = this.defaults.mode || 'full_auto';
+
+                // If the bot is known to the manager but currently offline, restart from preserved options.
+                if (m.botConnOptions.has(name)) {
+                    const saved = m.botConnOptions.get(name) || {};
+                    m.startBot(name, {
+                        host: saved.host || h,
+                        port: saved.port || p,
+                        mode,
+                        isRestart: true,
+                    });
+                    return res.json({ ok: true, botId: name, recovered: true });
+                }
+
+                m.startBot(name, { host: h, port: p, mode });
+                res.json({ ok: true, botId: name });
+            } catch (e) {
+                console.error(`[WebUI] Failed to start bot '${name}': ${e.message}`);
+                res.status(500).json({ error: `Failed to start bot: ${e.message}` });
+            }
         });
 
         // DELETE /api/bots/:id — remove a bot (handles both running and restarting states)
@@ -144,6 +169,17 @@ class WebUIServer {
                 ollamaUrl:   process.env.OLLAMA_URL   || '',
                 ollamaModel: process.env.OLLAMA_MODEL || 'gpt-oss:20b-cloud',
                 ollamaApiKey: process.env.OLLAMA_API_KEY ? '••••••••' : '',
+            });
+        });
+
+        // GET /api/health — lightweight runtime status for diagnostics.
+        this.app.get('/api/health', (req, res) => {
+            res.json({
+                ok: true,
+                webuiPort: this._listeningPort,
+                uptimeSec: Math.round(process.uptime()),
+                wsClients: this.clients.size,
+                runningBots: this.manager.bots.size,
             });
         });
 
@@ -563,6 +599,16 @@ class WebUIServer {
         const logListening = () => {
             const addr = this.server.address();
             const p = (addr && typeof addr === 'object') ? addr.port : currentPort;
+            this._listeningPort = p;
+            try {
+                const statusPath = path.join(process.cwd(), 'data', 'webui_status.json');
+                fs.mkdirSync(path.dirname(statusPath), { recursive: true });
+                fs.writeFileSync(statusPath, JSON.stringify({
+                    port: p,
+                    url: `http://localhost:${p}`,
+                    updatedAt: new Date().toISOString(),
+                }, null, 2));
+            } catch (_) {}
             console.log(`[WebUI] Dashboard available at http://localhost:${p}`);
         };
 

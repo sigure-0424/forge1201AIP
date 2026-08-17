@@ -1,22 +1,37 @@
 {
-  "timestamp": "2026-04-06T04:52:46.297Z",
+  "timestamp": "2026-04-21T07:49:38.150Z",
   "ready": true,
   "position": {
-    "x": 23.3,
-    "y": 84,
-    "z": 32.3
+    "x": -429.3,
+    "y": 69,
+    "z": -526.5
   },
   "health": 20,
   "food": 20,
   "dimension": "overworld",
   "isExecuting": false,
   "currentAction": null,
-  "actionQueue": [],
+  "actionQueue": [
+    {
+      "action": "collect",
+      "target": "oak_log",
+      "quantity": 16,
+      "timeout": 120
+    }
+  ],
   "treeDir": null,
   "inventory": [
     {
-      "name": "create:metal_girder",
+      "name": "createaddition:seed_oil",
+      "count": 32
+    },
+    {
+      "name": "gravestone:obituary",
       "count": 1
+    },
+    {
+      "name": "leash_knot:",
+      "count": 12
     }
   ],
   "armor": {
@@ -24,6 +39,6 @@
     "torso": null,
     "legs": null,
     "feet": null,
-    "hand": "create:metal_girder"
+    "hand": "leash_knot:"
   }
 }

@@ -74,7 +74,9 @@ class AgentManager {
             this.botActionCounts.set(botId, 0); // reset count
             console.log(`[AgentManager] Bot ${botId} initialized with mode: ${options.mode}`);
         } else {
-            this.botModes.set(botId, 'full_auto');
+            // Default to normal mode. Full-auto can be enabled explicitly via options.mode.
+            // This avoids unintended auto-transition to task_mode on long action sequences.
+            this.botModes.set(botId, 'normal');
         }
 
         const botProcess = fork(path.join(__dirname, 'bot_actuator.js'), [], {
@@ -808,7 +810,8 @@ Current Environment: ${JSON.stringify(data.environment)}${targetedBlockContext}$
 *CRITICAL*: Do not chain complex abstract tasks. Output single steps and wait for SYSTEM FEEDBACK before proceeding. (e.g., if you need wood to make a sword, output ONLY collect first. Exception: you may chain ONE collect action with ONE give action).
 *CRITICAL*: Avoid complex multi-step reasoning in a single response.
 *CRITICAL*: ALWAYS check inventory before deciding what to collect or craft. If something is already there, skip that step.
-*CRITICAL*: To collect any stone-type block or ore you NEED a pickaxe first. ALWAYS check "has_pickaxe" in Current Environment. If "has_pickaxe" is false, craft one first.
+*CRITICAL*: To collect any stone-type block or ore you NEED a pickaxe first. ALWAYS check "has_pickaxe" and "pickaxe_tier" in Current Environment. If "has_pickaxe" is false, craft a wooden_pickaxe first. If "has_pickaxe" is true, DO NOT craft any pickaxe — the existing one is sufficient regardless of tier.
+*CRITICAL*: NEVER craft a tool the bot already has. If "has_pickaxe" is true, skip all pickaxe-crafting steps. If "has_axe" is true, skip all axe-crafting steps. If "has_sword" is true, skip all sword-crafting steps. Check inventory BEFORE generating craft actions.
 *CRITICAL*: Stone-type blocks (stone, andesite, granite, diorite) and ores are UNDERGROUND. If the system reports "not found within 128 blocks", you must dig down first: [{"action":"collect","target":"stone","quantity":16,"timeout":60}] will open a shaft. Then retry the original target.
 *CRITICAL*: If a SYSTEM FEEDBACK message describes a failure, respond with the corrective action chain — do NOT just repeat the failed action.
 *CRITICAL*: If a SYSTEM FEEDBACK says "Partially collected X/Y <item>", compute the remaining quantity (Y - X) and issue [{"action":"collect","target":"<item>","quantity":<remaining>,"timeout":120}] to finish the job. Do NOT issue a chat message — issue the collect action.
@@ -1113,6 +1116,18 @@ Storage MOD remote access:     send_custom_payload (channel from wiki)
             }
         }
 
+        // If user asked for generic logs/wood (not a species), keep collect target generic.
+        const wantsAnyLog = /(原木|logs?\b|wood\b|木材)/i.test(userMsg) &&
+            !/(oak|birch|spruce|jungle|acacia|dark[_\s]?oak|mangrove|cherry|オーク|シラカバ|トウヒ|ジャングル|アカシア|ダークオーク|マングローブ)/i.test(userMsg);
+        if (wantsAnyLog) {
+            for (const a of sanitizedActions) {
+                if (!a || typeof a !== 'object') continue;
+                if (a.action === 'collect' && String(a.target || '').toLowerCase() === 'oak_log') {
+                    a.target = 'log';
+                }
+            }
+        }
+
         // If user explicitly asks for jetpack/elytra flight, promote goto to fly.
         const wantsFlight = /(jetpack|elytra|ジェットパック|エリトラ|飛んで|飛行|飛べ)/i.test(userMsg);
         if (wantsFlight) {
@@ -1225,18 +1240,11 @@ Storage MOD remote access:     send_custom_payload (channel from wiki)
             console.log(`[AgentManager] Bot ${botId} (Full Auto) action count: ${count}`);
 
             if (count >= 20) {
-                console.log(`[AgentManager] Bot ${botId} reached action limit in Full Auto. Switching to Task Mode.`);
-                safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: [{ action: "chat", message: "Action limit reached. Switching to Task Mode." }] });
-                this.botModes.set(botId, 'task_mode');
-
-                // Clear active requests to make way for task mode
-                this.activeLlmRequests.delete(botId);
-                this.chatQueue.set(botId, []);
-
-                setTimeout(() => {
-                    this.executeTaskModeTasks(botId);
-                }, 2000);
-                return;
+                // Do not force task_mode automatically from a hard cap.
+                // Large legitimate requests (e.g., multi-stack give/transfer) can exceed 20 actions.
+                console.log(`[AgentManager] Bot ${botId} reached full-auto action cap. Resetting counter and continuing in Full Auto.`);
+                safeBotProcessSend(botProcess, { type: 'EXECUTE_ACTION', action: [{ action: "chat", message: "Action count is high. Continuing current mode without forced Task Mode switch." }] });
+                this.botActionCounts.set(botId, 0);
             }
         }
 

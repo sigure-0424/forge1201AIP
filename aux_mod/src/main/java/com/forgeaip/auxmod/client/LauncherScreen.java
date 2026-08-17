@@ -170,18 +170,30 @@ public class LauncherScreen extends Screen {
         if (name.isEmpty()) return;
         String body = "{\"name\":\"" + escapeJson(name) + "\"}";
         OrchestratorClient.getInstance().postJson("/api/bots", body)
-                .thenAccept(resp -> sendClientToast((resp != null && resp.contains("\"ok\":true"))
-                        ? "[ForgeAIP] Added bot: " + name
-                        : "[ForgeAIP] Failed to add bot: " + name));
+                .thenAccept(resp -> {
+                    if (resp != null && resp.contains("\"ok\":true")) {
+                        sendClientToast("[ForgeAIP] Added bot: " + name);
+                        return;
+                    }
+                    String reason = extractErrorFromJson(resp);
+                    if (reason == null) reason = "orchestrator unreachable or invalid response";
+                    sendClientToast("[ForgeAIP] Failed to add bot: " + name + " (" + reason + ")");
+                });
     }
 
     private void doQuickRemoveBot() {
         String name = fBotQuickName != null ? fBotQuickName.getValue().trim() : "";
         if (name.isEmpty()) return;
         OrchestratorClient.getInstance().deleteJson("/api/bots/" + name)
-                .thenAccept(resp -> sendClientToast((resp != null && resp.contains("\"ok\":true"))
-                        ? "[ForgeAIP] Removed bot: " + name
-                        : "[ForgeAIP] Failed to remove bot: " + name));
+                .thenAccept(resp -> {
+                    if (resp != null && resp.contains("\"ok\":true")) {
+                        sendClientToast("[ForgeAIP] Removed bot: " + name);
+                        return;
+                    }
+                    String reason = extractErrorFromJson(resp);
+                    if (reason == null) reason = "orchestrator unreachable or invalid response";
+                    sendClientToast("[ForgeAIP] Failed to remove bot: " + name + " (" + reason + ")");
+                });
     }
 
     private void sendClientToast(String text) {
@@ -193,6 +205,27 @@ public class LauncherScreen extends Screen {
 
     private static String escapeJson(String s) {
         return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static String extractErrorFromJson(String json) {
+        if (json == null) return null;
+        String key = "\"error\"";
+        int k = json.indexOf(key);
+        if (k < 0) return null;
+        int colon = json.indexOf(':', k + key.length());
+        if (colon < 0) return null;
+        int q1 = json.indexOf('"', colon + 1);
+        if (q1 < 0) return null;
+        int q2 = q1 + 1;
+        while (q2 < json.length()) {
+            q2 = json.indexOf('"', q2);
+            if (q2 < 0) return null;
+            if (json.charAt(q2 - 1) != '\\') break;
+            q2++;
+        }
+        if (q2 <= q1) return null;
+        String raw = json.substring(q1 + 1, q2);
+        return raw.replace("\\\"", "\"").replace("\\\\", "\\");
     }
 
     // ── Rendering ─────────────────────────────────────────────────────────────

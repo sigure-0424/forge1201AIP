@@ -1,89 +1,45 @@
 {
-  "timestamp": "2026-04-14T08:28:26.806Z",
+  "timestamp": "2026-06-30T07:00:36.294Z",
   "ready": true,
   "position": {
-    "x": -776.8,
-    "y": 64,
-    "z": -803.7
+    "x": -368.6,
+    "y": 18,
+    "z": -514.5
   },
   "health": 20,
   "food": 20,
   "dimension": "overworld",
-  "isExecuting": true,
-  "currentAction": "collect",
+  "isExecuting": false,
+  "currentAction": null,
   "actionQueue": [],
   "treeDir": null,
   "inventory": [
     {
-      "name": "createbigcannons:built_up_heating",
-      "count": 2
-    },
-    {
-      "name": "createbigcannons:molten_cast_iron",
-      "count": 34
-    },
-    {
-      "name": "createaddition:seed_oil",
-      "count": 4
-    },
-    {
-      "name": "oak_log",
-      "count": 64
-    },
-    {
-      "name": "birch_log",
-      "count": 64
-    },
-    {
-      "name": "wheat_seeds",
+      "name": "iron_axe",
       "count": 1
-    },
-    {
-      "name": "birch_log",
-      "count": 56
-    },
-    {
-      "name": "create:stock_keeper_category",
-      "count": 3
-    },
-    {
-      "name": "create:limestone",
-      "count": 5
-    },
-    {
-      "name": "createbigcannons:set_delayed_inertia_fuze-",
-      "count": 4
     },
     {
       "name": "iron_pickaxe",
       "count": 1
     },
     {
-      "name": "oak_log",
-      "count": 5
-    },
-    {
-      "name": "createbigcannons:flowing_molten_nethersteel",
-      "count": 59
-    },
-    {
-      "name": "stick",
-      "count": 6
-    },
-    {
-      "name": "iron_shovel",
+      "name": "iron_pickaxe",
       "count": 1
     },
     {
-      "name": "iron_chestplate",
+      "name": "iron_pickaxe",
+      "count": 1
+    },
+    {
+      "name": "iron_pickaxe",
       "count": 1
     }
   ],
   "armor": {
     "head": null,
-    "torso": "create_jetpack:jetpack",
+    "torso": "create:creative_crate",
     "legs": "iron_leggings",
     "feet": null,
-    "hand": "create:limestone"
+    "hand": "iron_axe"
   }
 }

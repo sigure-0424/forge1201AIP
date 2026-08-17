@@ -4,6 +4,8 @@
 - TASK-20260409-004-experimental-world-exhaustive-validation: Execute full zone-by-zone E2E validation in generated experimental world via direct action API and collect evidence
 
 ## Completed
+- BUGFIX-20260417-002-mine-all-drop-pickup-webui-diagnostics: Align log mining with server-side cascade semantics, harden dropped-item pickup sweep, and add WebUI health/active-port diagnostics plus add-bot error visibility
+- BUGFIX-20260416-001-add-bot-diagnostics-place-craft-retry: Improve MOD launcher add-bot error visibility, harden place/craft retries, and prevent wrong-item placement during crafting_table placement
 - TASK-20260409-003-test-world-auto-generation: Add automated 9-zone test world generator from forgeaip_registry.json, clean-world Docker boot path, queued direct -goto parsing, and integration validation with Forge+bot containers
 - BUGFIX-20260409-002-come-landing-goto-hollow-escape: Remove onGround from come ACTIVE→IDLE (PID hover deadlock causes permanent airborne), add goto severe-stuck jetpack escape for hollow-below-hill terrain obstacles
 - BUGFIX-20260409-001-come-fall-goto-jetpack-llm-portal: Fix come jetpack bounce-fall loop (PID+onGround), goto vertical jetpack promotion (dy>=30), LLM portal misfire guard after goto failure
