@@ -1,35 +1,3 @@
-{
-  "timestamp": "2026-03-27T10:05:29.112Z",
-  "ready": true,
-  "position": {
-    "x": 1369.5,
-    "y": 8,
-    "z": 835.5
-  },
-  "health": 20,
-  "food": 20,
-  "isExecuting": true,
-  "actionQueue": [],
-  "treeDir": null,
-  "inventory": [
-    {
-      "name": "unknown",
-      "count": 1
-    },
-    {
-      "name": "bread",
-      "count": 1
-    },
-    {
-      "name": "water_bucket",
-      "count": 1
-    }
-  ],
-  "armor": {
-    "head": null,
-    "torso": null,
-    "legs": null,
-    "feet": null,
-    "hand": "unknown"
-  }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:77215823d29d3b118a1d5402363695481a1cc38d0182ee97d77d4a55b0ce17d8
+size 522

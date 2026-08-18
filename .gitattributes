@@ -1,8 +1,18 @@
 # Enforce LF line endings for all text files
 * text=auto eol=lf
-
 # Force binary treatment for known binary types
 *.png binary
 *.jpg binary
 *.jar binary
 *.class binary
+*.log filter=lfs diff=lfs merge=lfs -text
+*.txt filter=lfs diff=lfs merge=lfs -text
+*.json filter=lfs diff=lfs merge=lfs -text
+*.jsonl filter=lfs diff=lfs merge=lfs -text
+*.egg filter=lfs diff=lfs merge=lfs -text
+*.tar.gz filter=lfs diff=lfs merge=lfs -text
+*.whl filter=lfs diff=lfs merge=lfs -text
+jdk-*/** filter=lfs diff=lfs merge=lfs -text
+node_modules/** filter=lfs diff=lfs merge=lfs -text
+build/** filter=lfs diff=lfs merge=lfs -text
+out/** filter=lfs diff=lfs merge=lfs -text

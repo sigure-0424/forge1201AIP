@@ -1,27 +1,3 @@
-{
-  "timestamp": "2026-03-27T10:05:31.737Z",
-  "ready": true,
-  "position": {
-    "x": 1373.6,
-    "y": 10,
-    "z": 840.5
-  },
-  "health": 20,
-  "food": 20,
-  "isExecuting": true,
-  "actionQueue": [],
-  "treeDir": null,
-  "inventory": [
-    {
-      "name": "unknown",
-      "count": 1
-    }
-  ],
-  "armor": {
-    "head": null,
-    "torso": null,
-    "legs": null,
-    "feet": null,
-    "hand": "unknown"
-  }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:a994d40ffe45cd8d7d215bd541b75131065ad22524c5b41e2e75ee061dceb66e
+size 410

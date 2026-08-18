@@ -1,0 +1,29 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="MIT"
+
+[[mods]]
+modId="forgeaip"
+version="0.1.0"
+displayName="ForgeAIP Auxiliary Mod"
+description='''
+Client-side auxiliary mod for the Forge AI Player orchestrator system.
+Provides Bot Status HUD, in-game bot management commands, entity tracking,
+safe zone management, and procedure macro UI.
+'''
+logoFile="forgeaip.png"
+authors="ForgeAIP Contributors"
+
+[[dependencies.forgeaip]]
+    modId="forge"
+    mandatory=true
+    versionRange="[47.2,)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.forgeaip]]
+    modId="minecraft"
+    mandatory=true
+    versionRange="[1.20.1,1.21)"
+    ordering="NONE"
+    side="BOTH"

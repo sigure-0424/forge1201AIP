@@ -1,31 +1,3 @@
-{
-  "timestamp": "2026-03-27T10:05:33.159Z",
-  "ready": true,
-  "position": {
-    "x": 1383.3,
-    "y": 3,
-    "z": 862.5
-  },
-  "health": 18,
-  "food": 17,
-  "isExecuting": true,
-  "actionQueue": [],
-  "treeDir": null,
-  "inventory": [
-    {
-      "name": "unknown",
-      "count": 1
-    },
-    {
-      "name": "clay_ball",
-      "count": 28
-    }
-  ],
-  "armor": {
-    "head": null,
-    "torso": null,
-    "legs": null,
-    "feet": null,
-    "hand": "unknown"
-  }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:bd531d6b25939f1848c641196708599134350f248127237a5cfc5860645a0121
+size 467

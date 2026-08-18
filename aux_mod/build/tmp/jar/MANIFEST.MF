@@ -1,0 +1,9 @@
+Manifest-Version: 1.0
+Specification-Title: forgeaip
+Specification-Vendor: ForgeAIP Contributors
+Specification-Version: 1
+Implementation-Title: forgeaip-aux-mod
+Implementation-Version: 0.1.0
+Implementation-Vendor: ForgeAIP Contributors
+Implementation-Timestamp: 2026-04-13T00:37:15+0900
+

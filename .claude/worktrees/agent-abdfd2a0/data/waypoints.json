@@ -1,23 +1,3 @@
-[
-  {
-    "name": "nether_gate",
-    "x": -612,
-    "y": 68,
-    "z": -448,
-    "dimension": "overworld"
-  },
-  {
-    "name": "NetherFortressGate",
-    "x": -563,
-    "y": 67,
-    "z": -186,
-    "dimension": "the_nether"
-  },
-  {
-    "name": "nether_portal",
-    "x": -617,
-    "y": 67,
-    "z": -450,
-    "dimension": "the_nether"
-  }
-]
+version https://git-lfs.github.com/spec/v1
+oid sha256:1acd5cc742188a8bb7ccdd6e86e13d47609c76eb530176dff8b27c3ff7a599f6
+size 337

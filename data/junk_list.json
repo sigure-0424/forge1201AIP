@@ -1,13 +1,3 @@
-[
-  "granite",
-  "diorite",
-  "andesite",
-  "tuff",
-  "calcite",
-  "dirt",
-  "gravel",
-  "netherrack",
-  "rotten_flesh",
-  "poisonous_potato",
-  "ink_sac"
-]
+version https://git-lfs.github.com/spec/v1
+oid sha256:d89c6a2e3919cdc8d745c9b22ca0bf7feb278907343ba93893d30b37adb62fed
+size 156

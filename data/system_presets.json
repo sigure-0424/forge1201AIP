@@ -1,36 +1,3 @@
-{
-  "combat_aggressive": {
-    "MELEE_RANGE": 4.5,
-    "RETREAT_HEALTH_PCT": 0.15,
-    "CRIT_FALL_WAIT_MS": 150
-  },
-  "combat_defensive": {
-    "MELEE_RANGE": 2.5,
-    "RETREAT_HEALTH_PCT": 0.4,
-    "CRIT_FALL_WAIT_MS": 250
-  },
-  "farming_safe": {
-    "AUTONOMIC_EAT_FOOD_THRESHOLD": 20,
-    "COLLECT_TIMEOUT_MS": 30000
-  },
-  "exploration_fast": {
-    "PATHFINDER_THINK_TIMEOUT_MS": 3000,
-    "PATHFINDER_TICK_TIMEOUT": 3,
-    "COLLECT_TIMEOUT_MS": 10000
-  },
-  "my_preset": {
-    "MELEE_RANGE": 5,
-    "RETREAT_HEALTH_PCT": 0.15,
-    "CRIT_FALL_WAIT_MS": 150,
-    "PASSIVE_DEFENSE_INTERVAL_MS": 1500,
-    "PATHFINDER_THINK_TIMEOUT_MS": 5000,
-    "PATHFINDER_TICK_TIMEOUT": 5,
-    "COLLECT_TIMEOUT_MS": 20000,
-    "MLG_TRIGGER_FALL_DIST": 4,
-    "MLG_GROUND_DIST_THRESHOLD": 6,
-    "AUTONOMIC_EAT_FOOD_THRESHOLD": 18,
-    "AUTONOMIC_EAT_INTERVAL_MS": 8000,
-    "LLM_COOLDOWN_MS": 5000,
-    "LLM_FAILURE_CAP": 3
-  }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:78d60bb65119a7bfe7c8497542b8cdb01fc8b05b5cddbe18f8ffd84ee3f8547f
+size 919

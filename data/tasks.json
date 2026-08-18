@@ -1,27 +1,3 @@
-[
-  {
-    "id": 1,
-    "status": "completed",
-    "description": "kill 12 endermen"
-  },
-  {
-    "id": 2,
-    "status": "completed",
-    "description": "kill 1 blaze"
-  },
-  {
-    "id": 3,
-    "status": "completed",
-    "description": "craft 12 eye_of_ender"
-  },
-  {
-    "id": 4,
-    "status": "completed",
-    "description": "activate_end_portal"
-  },
-  {
-    "id": 5,
-    "status": "completed",
-    "description": "go to end"
-  }
-]
+version https://git-lfs.github.com/spec/v1
+oid sha256:dc20b3ebf5f1093a5c856df6683966d076dad283efab54fddbbf301b1f9f33fd
+size 434
