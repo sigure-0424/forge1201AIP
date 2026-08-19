@@ -1,3 +1,4 @@
+Hand over to "STATE.yaml" and delete
 # TASK_INDEX
 
 ## Active

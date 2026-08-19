@@ -1,3 +1,4 @@
+#This is just start claude code easy and quickly.
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname "$0")/tk_common.sh"
@@ -12,15 +13,14 @@ if ! command -v claude >/dev/null 2>&1; then
   exit 1
 fi
 
-BOOT_PROMPT=$(cat <<'EOF'
-BOOT PROTOCOL (mandatory):
-1. Read EVERYTHING in docs/core/ before any reasoning.
-2. Report only STATE fields by quoting docs/core/STATE.yaml; do not invent values.
-3. If active_tasks is empty, enumerate docs/proposed/ and select the best next task.
-4. Respect No-Confirm Mode: if the operator says “No approval required” or equivalent, proceed without asking.
-5. Handle transient locks or sync conflicts by wait / switch tasks / retry.
-6. Keep notebooks thin and prefer Docker + data/sample verification when project-specific verification exists.
-EOF
-)
+MASTER_GUIDANCE_PATH="$ROOT/docs/core/MASTER_GUIDANCE.xml"
 
-exec claude   --dangerously-skip-permissions   --append-system-prompt "$BOOT_PROMPT"   "BOOT: follow the injected startup protocol."
+if [ ! -f "$MASTER_GUIDANCE_PATH" ]; then
+  echo "[tk_start_claude] MASTER_GUIDANCE.xml not found at $MASTER_GUIDANCE_PATH."
+  exit 1
+fi
+
+exec claude \
+  --dangerously-skip-permissions \
+  --append-system-prompt-file "$MASTER_GUIDANCE_PATH" \
+  "BOOT: follow the injected startup protocol."

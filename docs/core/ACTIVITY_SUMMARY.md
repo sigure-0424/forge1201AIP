@@ -1,3 +1,4 @@
+Hand over to "STALE.yaml" and delete
 # ACTIVITY_SUMMARY
 
 Format:

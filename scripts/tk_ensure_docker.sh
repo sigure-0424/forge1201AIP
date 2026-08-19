@@ -1,3 +1,4 @@
+#This is just start Docker with CUDA build dev container code easy and quickly.
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname "$0")/tk_common.sh"

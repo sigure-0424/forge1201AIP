@@ -1,3 +1,4 @@
+Hand over to "MASTER_GUIDANCE" and delete
 # Minecraft Forge 1.20.1 AI Player System Architecture and Implementation Specification
 
 Note: Documents such as MASTER_GUIDANCE are designed for ML. They are not intended for mod development, so the directory structure can be overwritten by GOAL.md and user instructions.
